@@ -28,6 +28,7 @@ public partial class WarpGridManager : Node2D
     const int RestStride  = 8;
     const int EffStride   = 32;
     const int ParamSize   = 64;
+    const int LocalSize   = 8; // Must match layout(local_size_x/y = 8) in WarpGrid.glsl
 
     RenderingDevice _rd;
     Rid _shader, _pipeline;
@@ -46,6 +47,7 @@ public partial class WarpGridManager : Node2D
 
     public override void _Ready()
     {
+        if (_rd != null) return; // Idempotency: guard against double-_Ready on reparenting / tool-mode
         System.Diagnostics.Debug.Assert(Marshal.SizeOf<WarpEffectorData>() == 32);
         BuildMesh();
         InitGpu();
@@ -169,6 +171,8 @@ public partial class WarpGridManager : Node2D
 
     void UploadEffectors()
     {
+        // std430 SSBO layout — order-critical, must match WarpEffectorData struct in WarpGrid.glsl.
+        // BinaryWriter writes little-endian (all Godot-supported platforms) which matches GPU expectation.
         Array.Clear(_effScratch, 0, _effScratch.Length);
         int count = 0;
         var origin = GlobalPosition;
@@ -195,6 +199,8 @@ public partial class WarpGridManager : Node2D
 
     void UploadParams()
     {
+        // std140 UBO layout — order-critical, must match GridParams block in WarpGrid.glsl.
+        // Block is 64 bytes; 52 bytes written here, remaining 12 left zeroed as padding.
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
@@ -217,8 +223,8 @@ public partial class WarpGridManager : Node2D
     void Dispatch()
     {
         var set = _readIsA ? _uniformSetA : _uniformSetB;
-        uint gx = (uint)((GridW + 7) / 8);
-        uint gy = (uint)((GridH + 7) / 8);
+        uint gx = (uint)((GridW + LocalSize - 1) / LocalSize);
+        uint gy = (uint)((GridH + LocalSize - 1) / LocalSize);
 
         long list = _rd.ComputeListBegin();
         _rd.ComputeListBindComputePipeline(list, _pipeline);
@@ -231,12 +237,18 @@ public partial class WarpGridManager : Node2D
     public override void _ExitTree()
     {
         if (_rd == null) return;
-        _rd.FreeRid(_uniformSetA); _rd.FreeRid(_uniformSetB);
-        _rd.FreeRid(_imgPositions);
-        _rd.FreeRid(_bufStateA);   _rd.FreeRid(_bufStateB);
-        _rd.FreeRid(_bufRest);     _rd.FreeRid(_bufEff);
-        _rd.FreeRid(_bufParams);
-        _rd.FreeRid(_pipeline);    _rd.FreeRid(_shader);
+        // Crash-safety: guard each RID so partial InitGpu failure (mid-construction) cleans up safely.
+        FreeIfValid(_uniformSetA); FreeIfValid(_uniformSetB);
+        FreeIfValid(_imgPositions);
+        FreeIfValid(_bufStateA);   FreeIfValid(_bufStateB);
+        FreeIfValid(_bufRest);     FreeIfValid(_bufEff);
+        FreeIfValid(_bufParams);
+        FreeIfValid(_pipeline);    FreeIfValid(_shader);
         _rd = null;
+    }
+
+    void FreeIfValid(Rid rid)
+    {
+        if (rid.IsValid) _rd.FreeRid(rid);
     }
 }
