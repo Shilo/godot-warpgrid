@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3 uid="uid://bwgtest00001"]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" uid="uid://corlwgia51h2m" path="res://scripts/WarpGridManager.cs" id="1_mgr"]
 [ext_resource type="Script" uid="uid://nby2fir7likb" path="res://scripts/WarpEffector.cs" id="2_eff"]
@@ -20,7 +20,6 @@ Shape = 0
 Behavior = 0
 Radius = 300.0
 Strength = 5.0
-EndOffset = Vector2(0, 0)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(500, 500)
