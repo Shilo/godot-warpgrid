@@ -12,9 +12,9 @@ uniform ivec2 grid_dims;
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 // Phase 11 Task 4 — neon cyan. Bright, saturated, arcade-loud.
 uniform vec4 line_color : source_color = vec4(0.1, 1.0, 1.0, 1.0);
-// Phase 12.1: glow_gain 25 — small ripples read as high-energy neon, visual compensation
-// for the tight 0.1 structural clamp keeping actual motion small.
-uniform float glow_gain : hint_range(0.0, 200.0) = 25.0;
+// Phase 12.2: glow_gain 40 — blinding neon at any detectable movement, since the shader
+// clamp caps actual motion; visual energy is decoupled from physical speed.
+uniform float glow_gain : hint_range(0.0, 200.0) = 40.0;
 
 // Phase 6.1: mutually exclusive render modes.
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).

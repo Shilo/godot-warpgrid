@@ -72,11 +72,11 @@ public partial class WarpGridManager : Node2D
     // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
     // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
     // and global decay (vd=0.92) — keep neighbor damping minimal.
-    [Export] public float Stiffness     = 0.08f;   // Phase 12.1 — doubled for snappier return
-    [Export] public float Damping       = 0.1f;    // Phase 12.1 — slight bump, still safely under GPU-shatter threshold
+    [Export] public float Stiffness     = 0.06f;   // Phase 12.2 — slight drop, more "liquid" feel
+    [Export] public float Damping       = 0.05f;   // Phase 12.2 — back to GPU-safe floor, max jiggle
     [Export] public float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
     [Export] public float RestDamping   = 0.65f;   // quiet grid
-    [Export] public float VelDamp       = 0.92f;   // Phase 12 Task 3 — aggressive global decay
+    [Export] public float VelDamp       = 0.96f;   // Phase 12.2 — relaxed, lets ripples travel further
     // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
     [Export] public float VelocityBlend = 0.3f;    // Phase 12 Task 3 — heavy smoothing, force coordination
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
