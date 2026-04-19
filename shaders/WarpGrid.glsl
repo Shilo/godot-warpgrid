@@ -14,8 +14,8 @@ struct WarpEffectorData {
     uint  behavior_type;
 };
 
-layout(set = 0, binding = 0, std430) restrict readonly  buffer ReadSt   { NodeState data[]; } r_in;
-layout(set = 0, binding = 1, std430) restrict writeonly buffer WriteSt  { NodeState data[]; } r_out;
+layout(set = 0, binding = 0, std430) buffer ReadSt   { NodeState data[]; } r_in;
+layout(set = 0, binding = 1, std430) buffer WriteSt  { NodeState data[]; } r_out;
 layout(set = 0, binding = 2, std430) restrict readonly  buffer RestBuf  { RestState data[]; } r_rest;
 layout(set = 0, binding = 3, std430) restrict readonly  buffer EffBuf   { WarpEffectorData data[]; } r_eff;
 
