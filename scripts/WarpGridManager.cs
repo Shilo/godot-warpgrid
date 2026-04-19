@@ -72,13 +72,13 @@ public partial class WarpGridManager : Node2D
     // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
     // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
     // and global decay (vd=0.92) — keep neighbor damping minimal.
-    [Export] public float Stiffness     = 0.08f;   // Phase 12.5 — neighbor pull is secondary, anchor dominates
-    [Export] public float Damping       = 0.0f;    // no neighbor damping; Laplacian + rest_damping handle stability
-    [Export] public float RestStiffness = 0.3f;    // Phase 12.5 — snappy Geometry Wars return
-    [Export] public float RestDamping   = 0.15f;   // Phase 12.5 — local viscosity, not jelly
-    [Export] public float VelDamp       = 0.98f;   // Phase 12.5 — balanced global decay
+    [Export] public float Stiffness     = 0.22f;   // Phase 12.6 — tension bridge: ~2× anchor, carries waves
+    [Export] public float Damping       = 0.0f;    // no neighbor damping; Laplacian handles parallel stability
+    [Export] public float RestStiffness = 0.12f;   // Phase 12.6 — anchor yields to passing waves
+    [Export] public float RestDamping   = 0.02f;   // Phase 12.6 — minimal syrup, waves reach edges
+    [Export] public float VelDamp       = 0.99f;   // Phase 12.6 — max momentum persistence
     // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
-    [Export] public float VelocityBlend = 0.05f;   // Phase 12.5 — loose coupling, independent node motion
+    [Export] public float VelocityBlend = 0.12f;   // Phase 12.6 — just enough parallel coord, not a plate
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
     const int   SubSteps     = 4;
     const float RestLenScale = 0.95f;

@@ -6,9 +6,9 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 25.0f;  // Phase 12.5
-    [Export] public float ImpulseStrength = 100.0f; // Phase 12.5
-    [Export] public float CursorRadius    = 150.0f; // Phase 12.5 — sharper "poke" into the fluid
+    [Export] public float ForceStrength   = 15.0f;  // Phase 12.6
+    [Export] public float ImpulseStrength = 60.0f;  // Phase 12.6
+    [Export] public float CursorRadius    = 250.0f; // Phase 12.6 — wide kickstart, wave seeded across many nodes
 
     private WarpEffector _effector;
     private bool _triggerImpulse = false;
