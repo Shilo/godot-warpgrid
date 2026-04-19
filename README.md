@@ -78,6 +78,30 @@ Every node receives three kinds of force every tick:
 - Fixed `Dt = 1/60` shader constant — accumulator runs the compute at 60 Hz regardless of `Engine.PhysicsTicksPerSecond`, but the shader itself assumes that step size. True variable-`dt` requires UBO plumbing.
 - `MaxEffectors = 128` — hard cap. Exceeding it silently drops tail effectors.
 
+## Render modes (Phase 6.1)
+
+The display shader is a mutually exclusive toggle, driven by `WarpGridManager.RenderMode`:
+
+| Mode | Visual | Use |
+|------|--------|-----|
+| `Grid` (default) | Procedural UV lines (infinitely crisp via `smoothstep(fwidth)`) on a dark tinted backdrop. | Classic "warpgrid" look — clean, minimal, perfect for debug and game UX where the grid itself is the effect. |
+| `Texture` | The `MainTexture` sampled into every triangle of the warped mesh. Velocity adds a saturation-preserving brightness boost. | Sprite warping — any `Texture2D` assigned to `MainTexture` becomes a deformable membrane. |
+
+Toggle live at runtime via the Inspector or `mgr.RenderMode = WarpRenderMode.Texture;` — the setter pushes to the shader uniform, no `Rebuild()` needed. Procedural lines and textured sampling never co-exist; a hybrid mode is not supported.
+
+**Velocity glow:** both modes clamp the glow envelope at `0.6` and mix toward `base * 1.8` (not pure white) so saturation holds at peak velocity — no more "white-out" when an impulse fires.
+
+## Physics constants — Phase 6.1
+
+| Constant | Value | Feel |
+|----------|-------|------|
+| `Stiffness` | 24.0 | High neighbor pull → ripples propagate to grid edges before dying. |
+| `Damping` | 0.45 | Axial spring damping. |
+| `RestStiffness` | 3.0 | Weak anchor → waves reach the perimeter instead of being damped at the source. |
+| `RestDamping` | 0.2 | Low — nodes oscillate past their home 2–3 times before settling. |
+| `VelDamp` | 0.99 | Global per-tick multiplier; `0.99^60 ≈ 0.55`, so 50% energy remaining after 1 s. |
+| Effector falloff | Gaussian `exp(-d²/2σ²)`, σ = `radius/2` | Smooth bubble; no sharp near-field spike. `d_raw / sigma` keeps force amplitude radius-invariant. |
+
 ## What changed in Phase 5 / 5.1
 
 - `GridW` / `GridH` now count **cells**, not nodes. `GridW=10` → 10 cells across → 11 vertices per row. See spec §15.

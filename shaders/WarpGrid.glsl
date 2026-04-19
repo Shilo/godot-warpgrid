@@ -75,24 +75,26 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
     float d2    = dot(d, d);
     if (d2 > e.radius * e.radius) return vec2(0.0);
 
-    // Phase 6: Gaussian falloff — smooth bulges instead of sharp rational spikes.
-    // sigma = radius * 0.5 places the ~0.61× isovalue at half the radius,
-    // rolls off to ~0.14 at the cutoff. d_raw gives outward direction; magnitude
-    // scales by gauss so force→0 at the center (natural bulge profile).
+    // Phase 6.1: normalized Gaussian falloff.
+    //   sigma = radius * 0.5 → peak force at center, smooth rolloff to ~0.14 at the cutoff.
+    //   Dividing d_raw by sigma makes the force scale radius-invariant: halving Radius
+    //   no longer halves the effective force amplitude (avoids sharp vertex spikes when
+    //   a small-radius effector sits near a node).
+    //   Peak magnitude bound: at d = sigma, |force| = 2.5 * strength * e^(-0.5) ≈ 1.52 * strength.
     float sigma = max(e.radius, 1e-4) * 0.5;
     float gauss = exp(-d2 / (2.0 * sigma * sigma));
 
     if (e.shape_type == 0u) {
         vec2 dir_vec = e.end_point - e.start_point;
         if (dot(dir_vec, dir_vec) > 1e-10) {
-            // Radial-Directed — constant direction, Gaussian magnitude envelope.
+            // Radial-Directed — constant direction, normalized Gaussian magnitude envelope.
             return e.strength * gauss * normalize(dir_vec);
         }
-        // Radial-Explosive — outward from center.
-        return 2.5 * e.strength * gauss * d_raw;
+        // Radial-Explosive — outward from center; d_raw / sigma keeps force bubble radius-invariant.
+        return 2.5 * e.strength * gauss * (d_raw / sigma);
     }
     // Line-Explosive — outward from closest segment point.
-    return 2.5 * e.strength * gauss * d_raw;
+    return 2.5 * e.strength * gauss * (d_raw / sigma);
 }
 
 void main() {

@@ -407,6 +407,26 @@ The 64 B block is tightly packed — no natural padding beyond offset 52, which 
 3. Bump `ParamSize` in `WarpGridManager.cs` if total exceeds 64 B; grow `_paramScratch` accordingly.
 4. Re-read this section before touching the writer — offset drift bugs are silent and look like tuning bugs.
 
+### 16.1 Display shader uniforms (separate from the compute UBO)
+
+`WarpGridDisplay.gdshader` reads its own set of uniforms via `ShaderMaterial.SetShaderParameter`. These are **not** part of the compute `GridParams` UBO — they live in the canvas-item material and are pushed per-update, not per-tick.
+
+| Uniform | GLSL type | Set by | Role |
+|---------|-----------|--------|------|
+| `positions_tex` | `sampler2D` | `BuildMaterial` (once, via `Texture2Drd`) | Ping-ponged compute output — per-node `(pos, vel)`. |
+| `grid_size_pixels` | `vec2` | `BuildMaterial` | Pixel extent of the mesh (`GridSizePixels`). |
+| `grid_dims` | `ivec2` | `BuildMaterial` | `(NodesX, NodesY)`. Used in vertex for `texelFetch`; used in fragment for procedural grid tiling. |
+| `line_color` | `vec4 : source_color` | `BuildMaterial` | Tint — modulates texture sample in `Texture` mode, colors lines + backdrop in `Grid` mode. |
+| `glow_gain` | `float` | Default `8.0` (shader) | Velocity→brightness multiplier. Clamped at `0.6` internally to preserve saturation. |
+| `main_tex` | `sampler2D : source_color` | `BuildMaterial` when `MainTexture != null` | Sprite warp source. Sampled by UV in `Texture` mode only. |
+| `display_mode` | `int` | Setter on `WarpGridManager.RenderMode` + `BuildMaterial` | Mutually exclusive display toggle. `0 = Grid` (procedural lines via `fract + smoothstep`), `1 = Texture` (sample `main_tex`). **Named `display_mode` on the shader side** — `render_mode` is a reserved directive keyword in Godot's shading language (`render_mode unshaded;`) and cannot be used as a uniform identifier. |
+
+**Live toggle.** `RenderMode` is a backed C# property — its setter calls `_material.SetShaderParameter("display_mode", (int)value)` so changes via Inspector or script apply next frame without a `Rebuild()`.
+
+**Mutually exclusive.** The fragment shader branches on `display_mode`; grid lines and texture samples never co-exist. A hybrid mode is explicitly out of scope until requested.
+
+**Glow clamping (Phase 6.1).** Both branches clamp the velocity-glow envelope at `0.6` and mix toward `base * 1.8` (not pure white) so hue is preserved at peak speed — avoids the saturation blowout observed when `ImpulseStrength ≥ 200`.
+
 ## 17. `RestState` SSBO — Softness-Map Reference
 
 `RestState` is a per-node static buffer written once at init and read every tick by the compute kernel. Phase 5 widened the struct from `{ vec2 anchor }` (8 B) to `{ vec2 anchor, float weight, float _pad }` (16 B, `std430` stride) so a scalar weight can scale `rest_stiffness` and `rest_damping` locally — without touching the UBO or recompiling the shader.

@@ -5,6 +5,8 @@ using Godot;
 
 namespace WarpGrid;
 
+public enum WarpRenderMode { Grid = 0, Texture = 1 }
+
 [GlobalClass]
 public partial class WarpGridManager : Node2D
 {
@@ -39,6 +41,19 @@ public partial class WarpGridManager : Node2D
     // Phase 6: textured quad-plane — MainTexture samples into fragment via UV. Null = white fallback.
     [Export] public Texture2D MainTexture;
 
+    // Phase 6.1: mutually exclusive display modes. Grid = procedural UV lines; Texture = sampled sprite.
+    // Live-updates the display shader uniform on setter invocation.
+    WarpRenderMode _renderMode = WarpRenderMode.Grid;
+    [Export] public WarpRenderMode RenderMode
+    {
+        get => _renderMode;
+        set
+        {
+            _renderMode = value;
+            if (_material != null) _material.SetShaderParameter("display_mode", (int)value);
+        }
+    }
+
     // Phase 5: GridW / GridH now count CELLS, not nodes. A node-count grid has
     // (cells + 1) vertices per axis. All buffer sizing, mesh generation, shader
     // dispatch extents, and normalization math goes through these two helpers.
@@ -47,13 +62,12 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6 fluidity calibration — high neighbor stiffness propagates ripples outward,
-    // moderate rest pull gives elastic return, low damping preserves 2-3 bounces + ripple tails.
-    const float Stiffness     = 18.0f;   // Phase 6: was 10.0 — high energy transfer between neighbors
+    // Phase 6.1 fluidity calibration — more energy transfer, weaker anchor, longer ripple tails.
+    const float Stiffness     = 24.0f;   // Phase 6.1: 18 -> 24 — stronger neighbor pull, deeper propagation
     const float Damping       = 0.45f;
-    const float RestStiffness = 4.5f;    // Phase 6: was 6.0 — softer anchor, more elastic return
-    const float RestDamping   = 0.4f;    // Phase 6: was 1.2 — low damping for 2-3 bounces
-    const float VelDamp       = 0.985f;  // Phase 6: was 0.85 — preserve momentum for long ripples
+    const float RestStiffness = 3.0f;    // Phase 6.1: 4.5 -> 3.0 — weaker anchor lets waves reach edges
+    const float RestDamping   = 0.2f;    // Phase 6.1: 0.4 -> 0.2 — oscillate past home 2-3 times
+    const float VelDamp       = 0.99f;   // Phase 6.1: 0.985 -> 0.99 — preserve momentum longer
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
@@ -202,6 +216,7 @@ public partial class WarpGridManager : Node2D
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
         _material.SetShaderParameter("grid_dims",        new Vector2I(NodesX, NodesY));
         _material.SetShaderParameter("line_color",       LineColor);
+        _material.SetShaderParameter("display_mode",      (int)_renderMode);
         if (MainTexture != null)
             _material.SetShaderParameter("main_tex",     MainTexture);
         _meshInstance.Material = _material;
