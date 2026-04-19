@@ -111,27 +111,28 @@ void main() {
     }
 
     vec2 force = vec2(0.0);
-    float rest_len = p.grid_spacing.x * p.rest_length_scale;
+    float rest_len_x = p.grid_spacing.x * p.rest_length_scale;
+    float rest_len_y = p.grid_spacing.y * p.rest_length_scale;
 
     if (c.x > 0u) {
         NodeState n = r_in.data[idx(uvec2(c.x - 1u, c.y))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len, p.stiffness, p.damping);
+                              rest_len_x, p.stiffness, p.damping);
     }
     if (c.x + 1u < p.grid_size.x) {
         NodeState n = r_in.data[idx(uvec2(c.x + 1u, c.y))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len, p.stiffness, p.damping);
+                              rest_len_x, p.stiffness, p.damping);
     }
     if (c.y > 0u) {
         NodeState n = r_in.data[idx(uvec2(c.x, c.y - 1u))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len, p.stiffness, p.damping);
+                              rest_len_y, p.stiffness, p.damping);
     }
     if (c.y + 1u < p.grid_size.y) {
         NodeState n = r_in.data[idx(uvec2(c.x, c.y + 1u))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len, p.stiffness, p.damping);
+                              rest_len_y, p.stiffness, p.damping);
     }
 
     force += (rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping;
