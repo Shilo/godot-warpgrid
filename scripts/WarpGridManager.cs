@@ -72,13 +72,13 @@ public partial class WarpGridManager : Node2D
     // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
     // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
     // and global decay (vd=0.92) — keep neighbor damping minimal.
-    [Export] public float Stiffness     = 0.15f;   // Phase 12.3 — faster wave speed
-    [Export] public float Damping       = 0.02f;   // Phase 12.3 — minimal friction, waves travel far
-    [Export] public float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
-    [Export] public float RestDamping   = 0.65f;   // quiet grid
-    [Export] public float VelDamp       = 0.98f;   // Phase 12.3 — preserve momentum for long-range ripples
+    [Export] public float Stiffness     = 0.4f;    // Phase 12.4 — high-speed waves
+    [Export] public float Damping       = 0.0f;    // Phase 12.4 — zero neighbor damping, Laplacian handles stability
+    [Export] public float RestStiffness = 0.02f;   // Phase 12.4 — weak return, ripples last longer
+    [Export] public float RestDamping   = 0.65f;   // retained in UBO but unused (anchor is snap-only now)
+    [Export] public float VelDamp       = 0.99f;   // Phase 12.4 — max momentum preservation
     // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
-    [Export] public float VelocityBlend = 0.3f;    // Phase 12 Task 3 — heavy smoothing, force coordination
+    [Export] public float VelocityBlend = 0.2f;    // Phase 12.4 — lowered for sharper, higher-freq waves
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
     const int   SubSteps     = 4;
     const float RestLenScale = 0.95f;

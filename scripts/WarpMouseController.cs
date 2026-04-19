@@ -6,9 +6,9 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 10.0f;  // Phase 12.3
-    [Export] public float ImpulseStrength = 50.0f;  // Phase 12.3
-    [Export] public float CursorRadius    = 250.0f; // Phase 12.3 — wider hump, more nodes entrained in the ripple
+    [Export] public float ForceStrength   = 30.0f;  // Phase 12.4
+    [Export] public float ImpulseStrength = 120.0f; // Phase 12.4
+    [Export] public float CursorRadius    = 300.0f; // Phase 12.4 — wide hump, whole mesh feels each click
 
     private WarpEffector _effector;
     private bool _triggerImpulse = false;

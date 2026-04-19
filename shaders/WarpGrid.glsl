@@ -118,21 +118,9 @@ void main() {
         return;
     }
 
-    // Phase 7.2 gentle "viscosity" — inside an effector's radius, dampen ×0.98 (subtle, not
-    // a freeze). Light viscosity preserves enough momentum for the ripple to carry outward
-    // through the surrounding mesh while still absorbing the shatter-band frequencies.
-    float vel_damp_local  = p.vel_damp;
-    for (uint e2 = 0u; e2 < p.effector_count; e2++) {
-        WarpEffectorData ed2 = r_eff.data[e2];
-        vec2 center2 = (ed2.shape_type == 1u)
-            ? closest_on_segment(ed2.start_point, ed2.end_point, me.position)
-            : ed2.start_point;
-        vec2 d2v = me.position - center2;
-        if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
-            vel_damp_local = p.vel_damp * 0.98;
-            break;
-        }
-    }
+    // Phase 12.4 — Effector viscosity REMOVED. The "dampen inside radius" heuristic was
+    // eating waves before they could exit the mouse bubble. Stability now comes entirely
+    // from the Laplacian blend + the 0.2 structural clamp; no special-case damping zone.
 
     // Phase 7: force accumulator is pixel-displacement-per-step (no dt scaling anywhere).
     // Phase 9 Task 1: capture neighbor velocities from the read buffer for Laplacian blending.
@@ -166,7 +154,10 @@ void main() {
         v_down = n.velocity;
     }
 
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
+    // Phase 12.4 — anchor is a pure snap-force, no friction term. rest_damping used to
+    // drain wave energy at every node; now the anchor just pulls toward home and the global
+    // vel_damp handles overall decay. RestDamping is retained in the UBO but unused here.
+    force += (rest - me.position) * p.rest_stiffness * rest_w;
 
     // Phase 7: impulse and force branches collapse in displacement math — both add directly
     // to the per-step force accumulator; structural shield below bounds the result regardless.
@@ -192,10 +183,13 @@ void main() {
     //   3. Displacement clamp — ONLY the physical step is bounded (0.1 cell = 3.2 px).
     //   4. Persistence — new_vel stores the uncapped intent, NOT the limited displacement.
     vec2 acc          = force;
-    vec2 next_vel     = (me.velocity + acc) * vel_damp_local;
+    vec2 next_vel     = (me.velocity + acc) * p.vel_damp;
     vec2 avg_v        = (v_left + v_right + v_up + v_down) * 0.25;
     next_vel          = mix(next_vel, avg_v, p.velocity_blend);
-    vec2 displacement = clamp(next_vel, -p.grid_spacing * 0.1, p.grid_spacing * 0.1);
+    // Phase 12.4 — clamp relaxed 0.1 → 0.2. 0.2 × 4 sub-steps = 80% of a cell per frame;
+    // still under 100% so vertex swap is impossible, but fast enough for waves to trigger
+    // their neighbors before the ripple decays to below the jitter guard.
+    vec2 displacement = clamp(next_vel, -p.grid_spacing * 0.2, p.grid_spacing * 0.2);
     vec2 new_pos      = me.position + displacement;
     vec2 new_vel      = next_vel;
 
