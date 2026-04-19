@@ -17,14 +17,15 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    const float Stiffness     = 10.0f;  // was 0.28 — too weak in [0,1]
-    const float Damping       = 0.45f;  // was 0.06 — prevents "crunchy" visuals w/ stiffer springs
-    const float RestStiffness = 6.0f;   // was 0.10 — pulls nodes home promptly
-    const float RestDamping   = 0.10f;
-    const float VelDamp       = 0.92f;  // was 0.98 — settle faster, less "underwater"
+    const float Stiffness     = 10.0f;
+    const float Damping       = 0.45f;
+    const float RestStiffness = 6.0f;
+    const float RestDamping   = 0.4f;   // v5: was 0.10 — punchier settle, kills lingering ring
+    const float VelDamp       = 0.88f;  // v4: was 0.92 — thicker "liquid" feel, faster snap to rest
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
+    const float FalloffScale  = 1000.0f; // v4: sharper effector influence (was hardcoded 10000.0 in shader)
     const int   MaxEffectors  = 128;
 
     const int StateStride = 16;
@@ -168,12 +169,25 @@ public partial class WarpGridManager : Node2D
         _meshInstance.Material = _material;
     }
 
+    // v4: explicit fixed-step accumulator. Dispatch runs at exactly 60 Hz regardless of
+    // Engine.PhysicsTicksPerSecond — the shader always sees Dt = 1/60, keeping the simulation
+    // deterministic. Accumulator is clamped to 8 steps to avoid spiral-of-death on long hitches.
+    double _accum;
+    const int MaxCatchupSteps = 8;
+
     public override void _PhysicsProcess(double delta)
     {
-        UploadEffectors();
-        UploadParams();
-        Dispatch();
-        _readIsA = !_readIsA;
+        _accum += delta;
+        double maxAccum = Dt * MaxCatchupSteps;
+        if (_accum > maxAccum) _accum = maxAccum;
+        while (_accum >= Dt)
+        {
+            UploadEffectors();
+            UploadParams();
+            Dispatch();
+            _readIsA = !_readIsA;
+            _accum -= Dt;
+        }
     }
 
     void UploadEffectors()
@@ -231,7 +245,7 @@ public partial class WarpGridManager : Node2D
         bw.Write(_effCount);
         bw.Write(RestLenScale);
         bw.Write(ImpulseCap);
-        bw.Write(0.0f); // _pad0 at offset 52 (std140 alignment for vec2 at 56)
+        bw.Write(FalloffScale); // offset 52 — sharpens effector near-field (was _pad0 in Phase 4)
         float minDim = Mathf.Min(GridSizePixels.X, GridSizePixels.Y);
         bw.Write(GridSizePixels.X / minDim); // grid_aspect.x at offset 56
         bw.Write(GridSizePixels.Y / minDim); // grid_aspect.y at offset 60

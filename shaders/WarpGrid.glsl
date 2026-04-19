@@ -31,7 +31,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     uint  effector_count;    // offset 40
     float rest_length_scale; // offset 44
     float impulse_cap;       // offset 48
-    float _pad0;             // offset 52 (std140 padding to align vec2 at 56)
+    float falloff_scale;     // offset 52 — effector near-field sharpness (lower = tighter)
     vec2  grid_aspect;       // offset 56 — (pixel_w, pixel_h) / min(pixel_w, pixel_h)
 } p;
 
@@ -85,11 +85,11 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
             return 1.0 * e.strength / (10.0 * p.grid_spacing.x + dist) * normalize(dir_vec);
         }
         // Radial-Explosive — push outward along raw delta; magnitude falls off with corrected distance.
-        float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
+        float denom = p.falloff_scale * p.grid_spacing.x * p.grid_spacing.x + d2;
         return 2.5 * e.strength * d_raw / denom;
     }
     // Line-Explosive
-    float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
+    float denom = p.falloff_scale * p.grid_spacing.x * p.grid_spacing.x + d2;
     return 2.5 * e.strength * d_raw / denom;
 }
 

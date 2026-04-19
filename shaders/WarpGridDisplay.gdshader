@@ -5,7 +5,7 @@ uniform sampler2D positions_tex : filter_nearest;
 uniform vec2 grid_size_pixels;
 uniform ivec2 grid_dims;
 uniform vec4 line_color : source_color = vec4(0.15, 0.55, 1.0, 1.0);
-uniform float glow_gain : hint_range(0.0, 200.0) = 60.0;
+uniform float glow_gain : hint_range(0.0, 200.0) = 20.0;
 
 void vertex() {
 	int w = grid_dims.x;
