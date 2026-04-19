@@ -1,25 +1,19 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene format=3 uid="uid://d2k172751ykvi"]
 
 [ext_resource type="Script" uid="uid://corlwgia51h2m" path="res://scripts/WarpGridManager.cs" id="1_mgr"]
 [ext_resource type="Script" uid="uid://nby2fir7likb" path="res://scripts/WarpEffector.cs" id="2_eff"]
 
-[node name="WarpGridRoot" type="Node2D"]
+[node name="WarpGridRoot" type="Node2D" unique_id=1198507561]
 
-[node name="WarpGridManager" type="Node2D" parent="."]
+[node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
-GridW = 100
-GridH = 100
-GridSizePixels = Vector2(1000, 1000)
 Effectors = [NodePath("Effector1")]
-LineColor = Color(0.15, 0.55, 1, 1)
 
-[node name="Effector1" type="Node2D" parent="WarpGridManager"]
+[node name="Effector1" type="Node2D" parent="WarpGridManager" unique_id=1992371321]
+visible = false
 position = Vector2(500, 500)
 script = ExtResource("2_eff")
-Shape = 0
-Behavior = 0
-Radius = 300.0
-Strength = 5.0
+Strength = 0.1
 
-[node name="Camera2D" type="Camera2D" parent="."]
+[node name="Camera2D" type="Camera2D" parent="." unique_id=1388231658]
 position = Vector2(500, 500)

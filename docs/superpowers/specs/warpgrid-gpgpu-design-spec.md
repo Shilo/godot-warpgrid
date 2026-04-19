@@ -220,10 +220,13 @@ Static `ArrayMesh` built once in `_Ready`:
 ### 7.2 Zero-readback displacement
 `WarpGridDisplay.gdshader` (canvas_item):
 ```glsl
-ivec2 c = ivec2(VERTEX_ID % w, VERTEX_ID / w);
-VERTEX = texelFetch(positions_tex, c, 0).rg * grid_size_pixels;
+int w = grid_dims.x;
+int id = int(VERTEX_ID);
+ivec2 c = ivec2(id - (id / w) * w, id / w);
+vec2 p = texelFetch(positions_tex, c, 0).rg;
+VERTEX = p * grid_size_pixels;
 ```
-`VERTEX_ID` in `canvas_item` vertex shader corresponds to the linear index into the mesh's vertex buffer — matching the exact `y*W + x` order used by `MeshHelper.BuildGridVertices`. So vertex N reads texel (N%W, N/W) and gets the compute shader's latest position.
+`VERTEX_ID` in `canvas_item` vertex shader is the linear index into the mesh's vertex buffer — matching the exact `y*W + x` order used by `MeshHelper.BuildGridVertices`. Vertex N reads texel `(N%W, N/W)` (expressed via subtraction to avoid the `%` operator) and gets the compute shader's latest position.
 
 ### 7.3 Resource bridging: Texture2DRD
 `Texture2DRD` is a `Resource` wrapper that holds a non-owning RID reference to an RD-created texture. Setting `TextureRdRid = _imgPositions` lets a standard `ShaderMaterial` parameter slot accept it as a `sampler2D`. The underlying image is still owned by the manager's RD; the manager must keep it alive for the lifetime of any material using it, and free it in `_ExitTree`.

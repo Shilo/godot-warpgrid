@@ -34,7 +34,7 @@
 
 **Goal:** 100×100 GPU-driven reactive mass-spring grid. Compute kernel writes positions to an RD-backed texture; a `canvas_item` shader on a `MeshInstance2D` samples the texture via `VERTEX_ID`. Zero CPU readback. Supports Radial and Line-segment effectors with Force and Impulse behaviors. Look: tight, elastic "Geometry Wars: Retro Evolved" membrane.
 
-**Architecture (revised):**
+**Architecture:**
 - **Main RenderingDevice** (`RenderingServer.GetRenderingDevice()`) — NOT a local device, so resources can be shared with the canvas renderer.
 - **Three resources for physics state:**
   - `RestBuf` — static SSBO of `vec2 anchor` per node (8 bytes × N).
