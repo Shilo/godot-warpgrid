@@ -154,10 +154,10 @@ void main() {
         v_down = n.velocity;
     }
 
-    // Phase 12.4 — anchor is a pure snap-force, no friction term. rest_damping used to
-    // drain wave energy at every node; now the anchor just pulls toward home and the global
-    // vel_damp handles overall decay. RestDamping is retained in the UBO but unused here.
-    force += (rest - me.position) * p.rest_stiffness * rest_w;
+    // Phase 12.5 — rest_damping restored as LOCAL VISCOSITY. Per-node friction acting on
+    // absolute velocity (not inter-node), providing the "water, not jelly" feel: individual
+    // ripples settle thickly instead of bouncing forever. Anchor is now k·(rest−pos) − c·v.
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
 
     // Phase 7: impulse and force branches collapse in displacement math — both add directly
     // to the per-step force accumulator; structural shield below bounds the result regardless.
