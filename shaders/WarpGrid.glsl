@@ -164,9 +164,10 @@ void main() {
 
     vec2 new_vel = me.velocity + force * p.dt + impulse_v;
     new_vel *= p.vel_damp;
-    // Phase 6.2 safety speed limit — single-frame hitch can't teleport vertices and tear the mesh.
-    // Bound chosen well above peak impulse-cap velocity (~30) ... scaled to normalized coords.
-    new_vel = clamp(new_vel, vec2(-2.0), vec2(2.0));
+    // Phase 6.3 safety speed limit — ±2.5 (up from ±2.0). This is the safety belt that lets
+    // the high-elasticity profile (stiffness=40, vel_damp=0.996) stay numerically stable.
+    // Single-frame hitch can't teleport vertices and tear the mesh.
+    new_vel = clamp(new_vel, vec2(-2.5), vec2(2.5));
     if (length(new_vel) < 1e-4) new_vel = vec2(0.0);
     vec2 new_pos = me.position + new_vel * p.dt;
 

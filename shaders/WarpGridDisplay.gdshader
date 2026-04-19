@@ -38,14 +38,24 @@ void fragment() {
 		COLOR        = mix(base, bright, glow);
 	} else {
 		// Grid mode — procedural UV lines via fract + smoothstep.
-		// fract(UV * grid_dims) repeats 0..1 once per cell. df.* * 2.0 widens edges into
-		// soft "tubes" / "glow-wires" instead of razor-thin lines.
+		// Phase 6.3: two-pass — core (df*3.0) gives a thick "tube" line;
+		// halo (df*9.0) bleeds a soft bloom around the core to mask visible triangle edges
+		// at low cell counts (e.g. 36x20). Max-composited so halo only brightens where core is dim.
 		vec2 cells = vec2(grid_dims);
 		vec2 f     = fract(UV * cells);
 		vec2 df    = fwidth(UV * cells);
-		float line_x = 1.0 - smoothstep(0.0, df.x * 2.0, min(f.x, 1.0 - f.x));
-		float line_y = 1.0 - smoothstep(0.0, df.y * 2.0, min(f.y, 1.0 - f.y));
-		float line_mask = clamp(line_x + line_y, 0.0, 1.0);
+		float edge = min(f.x, 1.0 - f.x);
+		float edge_y = min(f.y, 1.0 - f.y);
+
+		float core_x = 1.0 - smoothstep(0.0, df.x * 3.0, edge);
+		float core_y = 1.0 - smoothstep(0.0, df.y * 3.0, edge_y);
+		float core   = clamp(core_x + core_y, 0.0, 1.0);
+
+		float halo_x = 1.0 - smoothstep(0.0, df.x * 9.0, edge);
+		float halo_y = 1.0 - smoothstep(0.0, df.y * 9.0, edge_y);
+		float halo   = clamp((halo_x + halo_y) * 0.45, 0.0, 1.0);
+
+		float line_mask = max(core, halo);
 
 		vec4 bg      = vec4(line_color.rgb * 0.08, 0.85);      // dark semi-transparent backdrop
 		vec4 line_c  = line_color;
