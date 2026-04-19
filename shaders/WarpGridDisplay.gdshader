@@ -10,10 +10,11 @@ uniform ivec2 grid_dims;
 // Phase 6.7: physics texture dimensions (node count, e.g. 37×21 for a 36×20 phys grid).
 // Used to offset UV sampling to texel centers for exact endpoint alignment.
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
-uniform vec4 line_color : source_color = vec4(0.15, 0.55, 1.0, 1.0);
-// Phase 10 Task 2: glow_gain bumped to 12 for the "neon" arcade feel. The per-channel
-// min(..., 1.0) cap at the end keeps the brightness from blowing out.
-uniform float glow_gain : hint_range(0.0, 200.0) = 12.0;
+// Phase 11 Task 4 — neon cyan. Bright, saturated, arcade-loud.
+uniform vec4 line_color : source_color = vec4(0.1, 1.0, 1.0, 1.0);
+// Phase 11 Task 4: glow_gain bumped to 15 now that the speed limit keeps displacements small.
+// Higher glow gives the impression of high energy even while the physics stays tame.
+uniform float glow_gain : hint_range(0.0, 200.0) = 15.0;
 
 // Phase 6.1: mutually exclusive render modes.
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).

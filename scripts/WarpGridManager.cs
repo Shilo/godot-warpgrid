@@ -68,17 +68,17 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 10 "Golden Constants" — locked from the auto-tuner's attractor-center findings.
-    // Phase 7.2 mass-inertial integration (raw pixel-stretch springs, forces into velocity).
-    // RestState.weight=1.0 per-node = unit mass.
-    [Export] public float Stiffness     = 0.28f;   // high-tension midpoint of tuner's equilibrium
-    [Export] public float Damping       = 0.45f;   // neighbor axial damping — absorbs oscillation
+    // Phase 11 "Dampened Arcade" — constants re-tuned for the 0.15 structural speed limit.
+    // The tighter clamp changes the effective transfer function: stiffness now needs to be
+    // lower (parallel-equivalent of Unity's 0.28 is 0.04), damping higher to absorb parallel
+    // overshoot, and Laplacian blend stronger for inter-node coordination at 240 Hz.
+    [Export] public float Stiffness     = 0.04f;   // Phase 11 Task 2 — parallel-equivalent of Unity 0.28
+    [Export] public float Damping       = 0.8f;    // Phase 11 Task 2 — absorbs parallel overshoot
     [Export] public float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
     [Export] public float RestDamping   = 0.65f;   // tuner's "Quiet Grid" damping
-    [Export] public float VelDamp       = 0.98f;   // global momentum preservation
-    // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg. 0.08 sits just
-    // above the tuner's 0.05 floor, leaving a safety margin against high-energy impulses.
-    [Export] public float VelocityBlend = 0.08f;
+    [Export] public float VelDamp       = 0.94f;   // Phase 11 Task 2 — aggressive decay, no "singing"
+    // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
+    [Export] public float VelocityBlend = 0.25f;   // Phase 11 Task 2 — stronger parallel coordination
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
     const int   SubSteps     = 4;
     const float RestLenScale = 0.95f;
