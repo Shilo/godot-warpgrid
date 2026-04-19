@@ -184,6 +184,16 @@ void main() {
     vec2 new_pos      = me.position + displacement;
     new_vel           = displacement * vel_damp_local;
 
+    // Phase 8 — Inelastic Anchor Tether. Any node past ±1.5 cells from its rest anchor is
+    // snapped back AND has its per-axis velocity killed on the clamped axis — an "inelastic
+    // wall collision". Without the velocity-kill the node would infinitely ratchet against
+    // the tether each step (stale outward momentum + clamp = pinned, maxVel frozen).
+    vec2 max_offset  = p.grid_spacing * 1.5;
+    vec2 clamped_pos = clamp(new_pos, rs.anchor - max_offset, rs.anchor + max_offset);
+    if (clamped_pos.x != new_pos.x) new_vel.x = 0.0;
+    if (clamped_pos.y != new_pos.y) new_vel.y = 0.0;
+    new_pos = clamped_pos;
+
     // Jitter guard — 0.01 px in absolute pixels; well below any perceivable motion.
     if (length(new_vel) < 1e-2) new_vel = vec2(0.0);
 

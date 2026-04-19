@@ -13,6 +13,14 @@ uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 uniform vec4 line_color : source_color = vec4(0.15, 0.55, 1.0, 1.0);
 uniform float glow_gain : hint_range(0.0, 200.0) = 8.0;
 
+// Phase 8 Task 4 — Tuning Highlight. When a node's velocity magnitude passes shield_warn_speed
+// (in px/step) it is, by definition, saturated against the structural displacement shield in
+// WarpGrid.glsl (displacement clamp ±0.4 cell at vel_damp=0.98 → peak v_speed ≈ 12.5 px/step
+// per axis, ~17.7 both-axes). We flip the line to red and double the glow so the eye can see
+// exactly which zones of the mesh are "breaking" during an auto-tune cycle.
+uniform float shield_warn_speed : hint_range(0.0, 50.0) = 10.0;
+uniform vec4  shield_warn_color : source_color = vec4(1.0, 0.12, 0.12, 1.0);
+
 // Phase 6.1: mutually exclusive render modes.
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).
 uniform int display_mode = 0;
@@ -38,10 +46,16 @@ void fragment() {
 	// Phase 6.2 — smoothstep-mapped glow: soft ramp to saturation, no harsh knee.
 	float glow = smoothstep(0.0, 1.0, v_speed * glow_gain);
 
+	// Phase 8 Task 4 — structural shield-hit detection. v_speed is bilinearly interpolated so
+	// the red wash bleeds smoothly across cells adjacent to a clamped node (visually: red heat).
+	bool shield_hit = v_speed > shield_warn_speed;
+	vec4 tint = shield_hit ? shield_warn_color : line_color;
+	if (shield_hit) glow *= 2.0;
+
 	if (display_mode == 1) {
-		// Texture mode — pure sprite warp. line_color tints the sampled color.
+		// Texture mode — pure sprite warp. tint replaces line_color as the sampler modulator.
 		vec4 tex_col = texture(main_tex, UV);
-		vec4 base    = tex_col * line_color;
+		vec4 base    = tex_col * tint;
 		vec4 bright  = base * 1.8;
 		bright.a     = base.a;
 		COLOR        = mix(base, bright, glow);
@@ -74,7 +88,7 @@ void fragment() {
 		float line_mask = max(core, halo);
 
 		vec4 bg      = vec4(line_color.rgb * 0.08, 0.85);      // dark semi-transparent backdrop
-		vec4 line_c  = line_color;
+		vec4 line_c  = tint;  // Phase 8 Task 4: shield-hit zones read red, rest-of-mesh reads line_color
 		vec4 bright  = line_c * 1.8;
 		bright.a     = line_c.a;
 		vec4 lit     = mix(line_c, bright, glow);

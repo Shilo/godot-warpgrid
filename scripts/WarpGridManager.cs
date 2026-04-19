@@ -71,11 +71,12 @@ public partial class WarpGridManager : Node2D
     // Phase 7.2 "mass-inertial" — raw pixel-stretch springs + acceleration integration.
     // Forces accumulate into velocity (not displacement), giving nodes real inertia and the
     // "slide-into-place" feel of Geometry Wars. RestState.weight=1.0 per-node = unit mass.
-    const float Stiffness     = 0.28f;   // Phase 7.2: 0.12 -> 0.28 — Unity pixel-scale neighbor spring
-    const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
-    const float RestStiffness = 0.05f;   // Phase 7.2: 0.01 -> 0.05 — weak pull = long-lasting ripples
-    const float RestDamping   = 0.06f;   // Phase 7.2: 0.04 -> 0.06 — kills high-freq jitter
-    const float VelDamp       = 0.98f;   // Phase 7.2: 0.94 -> 0.98 — global momentum preservation
+    // Phase 8: non-const — auto-tuner mutates these live based on readback metrics.
+    float Stiffness     = 0.5f;    // Phase 8 stress-test seed — tuner walks down from here
+    float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
+    float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
+    float RestDamping   = 0.06f;   // kills high-freq jitter
+    float VelDamp       = 0.98f;   // global momentum preservation
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;
@@ -104,6 +105,26 @@ public partial class WarpGridManager : Node2D
 
     byte[] _stateScratch, _restScratch, _effScratch, _paramScratch;
     uint _effCount;
+
+    // Phase 8: GPGPU Diagnostic & Auto-Tune Suite.
+    //   TuningMode kicks a 60-frame cycle — RunStabilityTest + impulse at frame 0, settle 1..59.
+    //   Impulse is injected HARD-WIRED into _effScratch[0] inside UploadEffectors, bypassing
+    //   the SceneTree/group path so the pulse fires regardless of scene state.
+    //   RunStabilityTest() pulls back the last-written NodeState buffer and computes:
+    //     (1) Resonance Score — avg velocity delta between adjacent nodes (checkerboard detector)
+    //     (2) maxVel          — peak per-node velocity magnitude (instability detector)
+    //     (3) Shatter count   — informational: nodes displaced > 50% of grid_spacing from rest
+    [Export] public bool  TuningMode          = true;     // Phase 8 Task 4: start ON
+    [Export] public float ResonanceThreshold  = 0.02f;    // Phase 8 Task 4: sensitive to shivering
+    [Export] public float TunePulseRadius     = 150.0f;
+    [Export] public float TuneImpulseStrength = 1000.0f;  // Phase 8 Task 4: forces a response
+    int   _tuneFrameCount = 0;
+    const int TuneCycle   = 60;
+    byte[] _readbackBuffer;
+    // Phase 8 Task 3 — consecutive-calm-cycle counter. After N cycles with shatter=0 and
+    // maxVel < threshold, the tuner starts pushing Stiffness UP to find the max-stable-tension
+    // point. Any sign of instability resets the streak to zero.
+    int _calmStreak = 0;
 
     public override void _Ready()
     {
@@ -245,6 +266,13 @@ public partial class WarpGridManager : Node2D
     // kernel is dispatched 4× with ping-pong to let wavefronts propagate 4 cells per visible tick.
     public override void _PhysicsProcess(double delta)
     {
+        // Phase 8: at cycle start — measure end-of-previous-cycle state, THEN wipe buffers
+        // to perfect rest so every diagnostic cycle runs from the same clean initial condition.
+        if (TuningMode && _tuneFrameCount == 0)
+        {
+            RunStabilityTest();
+            ResetPhysicsState();
+        }
         UploadEffectors();
         UploadParams();
         for (int i = 0; i < SubSteps; i++)
@@ -252,6 +280,120 @@ public partial class WarpGridManager : Node2D
             Dispatch();
             _readIsA = !_readIsA;
         }
+        if (TuningMode) _tuneFrameCount = (_tuneFrameCount + 1) % TuneCycle;
+    }
+
+    // Phase 8 Task 2 — Full Buffer Reset. Re-uploads the initial _stateScratch (rest positions,
+    // zero velocity) to BOTH ping-pong state buffers. Without this, stale energy from the prior
+    // failed cycle contaminates the next test and the tuner is measuring cumulative drift instead
+    // of the isolated response to this cycle's impulse.
+    void ResetPhysicsState()
+    {
+        if (_rd == null || _stateScratch == null) return;
+        _rd.BufferUpdate(_bufStateA, 0, (uint)_stateScratch.Length, _stateScratch);
+        _rd.BufferUpdate(_bufStateB, 0, (uint)_stateScratch.Length, _stateScratch);
+    }
+
+    // Phase 8 — pull the most recently written NodeState buffer back to the CPU, compute
+    // resonance + shatter metrics, and nudge the live constants toward stability.
+    //   BufferGetData is a synchronous full-fence stall — only ever called in TuningMode.
+    public void RunStabilityTest()
+    {
+        if (_rd == null) return;
+        // Phase 8 Task 3 — the last sub-step WRITE target. With _readIsA toggled after every
+        // dispatch, the buffer the kernel just wrote to is the OPPOSITE of the current read
+        // pointer at the moment this method runs (before the next frame's dispatch chain).
+        var latestStateBuf = _readIsA ? _bufStateB : _bufStateA;
+        _readbackBuffer = _rd.BufferGetData(latestStateBuf);
+
+        int nx = PhysNodesX, ny = PhysNodesY;
+        float sx = GridSizePixels.X / PhysGridW;
+        float sy = GridSizePixels.Y / PhysGridH;
+        float shatterThreshX = sx * 0.5f;
+        float shatterThreshY = sy * 0.5f;
+
+        int   shatter       = 0;
+        int   clampedAtRest = 0;
+        int   nanCount      = 0;
+        float maxVel        = 0.0f;
+        int   maxVelX       = -1, maxVelY = -1;
+        float resonanceSum  = 0.0f;
+        int   resonanceN    = 0;
+
+        // Scratch — pull raw NodeState stride-by-stride.
+        float PosX(int x, int y) => BitConverter.ToSingle(_readbackBuffer, (y * nx + x) * StateStride);
+        float PosY(int x, int y) => BitConverter.ToSingle(_readbackBuffer, (y * nx + x) * StateStride + 4);
+        float VelX(int x, int y) => BitConverter.ToSingle(_readbackBuffer, (y * nx + x) * StateStride + 8);
+        float VelY(int x, int y) => BitConverter.ToSingle(_readbackBuffer, (y * nx + x) * StateStride + 12);
+
+        for (int y = 0; y < ny; y++)
+        for (int x = 0; x < nx; x++)
+        {
+            float px = PosX(x, y), py = PosY(x, y);
+            float vx = VelX(x, y), vy = VelY(x, y);
+            if (float.IsNaN(px) || float.IsNaN(py) || float.IsNaN(vx) || float.IsNaN(vy))
+            {
+                nanCount++;
+                continue;
+            }
+
+            float restX = (float)x / PhysGridW * GridSizePixels.X;
+            float restY = (float)y / PhysGridH * GridSizePixels.Y;
+            float dx    = Mathf.Abs(px - restX);
+            float dy    = Mathf.Abs(py - restY);
+            if (dx > shatterThreshX || dy > shatterThreshY) shatter++;
+            // Success Invariant #3 — at rest, no node should sit against the hard position clamp.
+            if (dx >= sx * 0.99f || dy >= sy * 0.99f) clampedAtRest++;
+
+            float vmag = MathF.Sqrt(vx * vx + vy * vy);
+            if (vmag > maxVel) { maxVel = vmag; maxVelX = x; maxVelY = y; }
+        }
+
+        // Resonance Score — avg |v_me - v_neighbor| over the interior. Checkerboard patterns
+        // where adjacent nodes oscillate anti-phase produce huge neighbor-velocity deltas.
+        for (int y = 1; y < ny - 1; y++)
+        for (int x = 1; x < nx - 1; x++)
+        {
+            float vx  = VelX(x, y),     vy  = VelY(x, y);
+            float vxR = VelX(x + 1, y), vyR = VelY(x + 1, y);
+            float vxD = VelX(x, y + 1), vyD = VelY(x, y + 1);
+            resonanceSum += MathF.Sqrt((vx - vxR) * (vx - vxR) + (vy - vyR) * (vy - vyR));
+            resonanceSum += MathF.Sqrt((vx - vxD) * (vx - vxD) + (vy - vyD) * (vy - vyD));
+            resonanceN   += 2;
+        }
+        float resonance = resonanceN > 0 ? resonanceSum / resonanceN : 0.0f;
+
+        // Phase 8 Task 3 — refined adjust rules.
+        //   maxVel > 10 → runaway: halve Stiffness + impulse, reset calm-streak.
+        //   shatter==0 AND maxVel < 0.1 for 2 consecutive cycles → push Stiffness +5% to find
+        //     the Maximum Stable Tension before the mesh starts breaking again.
+        //   Any anomaly in between resets the calm-streak counter.
+        //   Resonance rule runs independently — damping always responds to shivering.
+        if (maxVel > 10.0f)
+        {
+            Stiffness           *= 0.5f;
+            TuneImpulseStrength *= 0.5f;
+            _calmStreak          = 0;
+        }
+        else if (shatter == 0 && maxVel < 0.1f)
+        {
+            _calmStreak++;
+            if (_calmStreak >= 2) Stiffness *= 1.05f;
+        }
+        else
+        {
+            _calmStreak = 0;
+        }
+
+        if (resonance > ResonanceThreshold)
+        {
+            RestDamping += 0.1f;
+        }
+
+        GD.Print($"[TUNE] shatter={shatter,4} clampRest={clampedAtRest,3} NaN={nanCount,3} " +
+                 $"res={resonance:F4} maxVel={maxVel:F3}@({maxVelX,2},{maxVelY,2}) calm={_calmStreak} " +
+                 $"| k={Stiffness:F3} rk={RestStiffness:F3} d={Damping:F3} rd={RestDamping:F3} " +
+                 $"vd={VelDamp:F3} imp={TuneImpulseStrength:F3}");
     }
 
     void UploadEffectors()
@@ -265,6 +407,23 @@ public partial class WarpGridManager : Node2D
 
         using var ms = new MemoryStream(_effScratch);
         using var bw = new BinaryWriter(ms);
+
+        // Phase 8 Task 1 — HARD-WIRED DIAGNOSTIC PULSE. On the first frame of each tune cycle
+        // write a WarpEffectorData struct directly into _effScratch[0], bypassing SceneTree +
+        // group registration entirely. Guarantees the diagnostic pulse fires even in an empty
+        // scene and gives the auto-tuner a deterministic stimulus independent of user input.
+        if (TuningMode && _tuneFrameCount == 0)
+        {
+            Vector2 center = GridSizePixels * 0.5f; // grid-local coords; shader works in pixels
+            bw.Write(center.X);                 bw.Write(center.Y);               // StartPoint
+            bw.Write(center.X);                 bw.Write(center.Y);               // EndPoint
+            bw.Write(TunePulseRadius);                                            // Radius
+            bw.Write(TuneImpulseStrength);                                        // Strength
+            bw.Write((uint)WarpShapeType.Radial);                                 // ShapeType
+            bw.Write((uint)WarpBehaviorType.Impulse);                             // BehaviorType
+            count++;
+        }
+
         foreach (Node n in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (count >= MaxEffectors) break;
