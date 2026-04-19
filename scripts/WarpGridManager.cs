@@ -72,12 +72,17 @@ public partial class WarpGridManager : Node2D
     // Forces accumulate into velocity (not displacement), giving nodes real inertia and the
     // "slide-into-place" feel of Geometry Wars. RestState.weight=1.0 per-node = unit mass.
     // Phase 8: non-const — auto-tuner mutates these live based on readback metrics.
-    // Phase 8.4 Task 5 — diagnostic reset seeds: under-damped start (d << 2√k).
-    float Stiffness     = 0.3f;    // Phase 8.4 Task 5 diagnostic seed
-    float Damping       = 0.1f;    // Phase 8.4 Task 5 — well below critical 2√0.3 ≈ 1.10
+    // Phase 9 Task 2: higher starting stiffness now that Laplacian blend stabilizes neighbors.
+    float Stiffness     = 0.25f;   // Phase 9 Task 2 — 10× ceiling unlocked by velocity blending
+    float Damping       = 0.1f;    // well below critical 2√0.25 = 1.0
     float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
     float RestDamping   = 0.06f;   // kills high-freq jitter
     float VelDamp       = 0.98f;   // global momentum preservation
+    // Phase 9 Task 1 — Laplacian blend factor. Each step mixes velocity with 4-neighbor avg.
+    // Calm-streak rule in tuner bleeds this toward 0.05 floor so high-fidelity motion survives
+    // once the system proves stable. Tuner never pushes below the floor.
+    float _velocityBlend = 0.15f;
+    const float VelocityBlendFloor = 0.05f;
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;
@@ -89,7 +94,9 @@ public partial class WarpGridManager : Node2D
     const int StateStride = 16;
     const int RestStride  = 16; // v5: vec2 anchor + float weight + float _pad (std430 stride)
     const int EffStride   = 32;
-    const int ParamSize   = 64;
+    // Phase 9: UBO expanded from 64 → 80 bytes to fit velocity_blend at offset 64.
+    // std140 rounds the block up to the next 16-byte multiple, so 68 used → 80 allocated.
+    const int ParamSize   = 80;
     const int LocalSize   = 8; // Must match layout(local_size_x/y = 8) in WarpGrid.glsl
 
     RenderingDevice _rd;
@@ -116,9 +123,9 @@ public partial class WarpGridManager : Node2D
     //     (2) maxVel          — peak per-node velocity magnitude (instability detector)
     //     (3) Shatter count   — informational: nodes displaced > 50% of grid_spacing from rest
     [Export] public bool  TuningMode          = true;     // Phase 8 Task 4: start ON
-    [Export] public float ResonanceThreshold  = 0.005f;   // Phase 8.4 Task 5: hyper-sensitive
+    [Export] public float ResonanceThreshold  = 0.001f;   // Phase 9 Task 2: ultra-tight filter
     [Export] public float TunePulseRadius     = 150.0f;
-    [Export] public float TuneImpulseStrength = 50.0f;    // Phase 8.4 Task 5 diagnostic seed
+    [Export] public float TuneImpulseStrength = 200.0f;   // Phase 9 Task 3: "snappy" seed
     int   _tuneFrameCount = 0;
     const int TuneCycle   = 60;
     byte[] _readbackBuffer;
@@ -413,13 +420,20 @@ public partial class WarpGridManager : Node2D
         // (5) — Phase 8.4 Task 4: calm climb hunts hi-tension/lo-friction. Only bumps k when
         // damping is still under critical — i.e., there is "headroom" in the ratio regime.
         // RestDamping creeps DOWN each calm cycle so the mesh trends toward the Geometry Wars ideal.
+        // Phase 9 Task 2: velocity_blend also creeps DOWN toward VelocityBlendFloor (0.05) each
+        // calm cycle, relaxing the Laplacian so motion stays crisp once stability is proven.
         if (!anomaly && _structuralCooldown == 0)
         {
             _calmStreak++;
-            if (_calmStreak >= 2 && Damping < 2.0f * MathF.Sqrt(Stiffness))
+            // Phase 9: use <= not < — the critical-damping cap pins Damping to exactly 2√k,
+            // so strict inequality starves the climb forever. At == we're on the under/critical
+            // boundary (physically "fastest decay without oscillation"), which is fine to climb
+            // from: higher k next cycle means higher cap, opening fresh headroom organically.
+            if (_calmStreak >= 2 && Damping <= 2.0f * MathF.Sqrt(Stiffness))
             {
-                Stiffness   *= 1.05f;
-                RestDamping -= 0.01f;
+                Stiffness     *= 1.05f;
+                RestDamping   -= 0.01f;
+                _velocityBlend = MathF.Max(_velocityBlend - 0.005f, VelocityBlendFloor);
             }
         }
 
@@ -438,7 +452,7 @@ public partial class WarpGridManager : Node2D
                  $"res={resonance:F4} maxVel={maxVel:F3}@({maxVelX,2},{maxVelY,2}) " +
                  $"calm={_calmStreak} cd={_structuralCooldown} " +
                  $"| k={Stiffness:F3} rk={RestStiffness:F3} d={Damping:F3} rd={RestDamping:F3} " +
-                 $"vd={VelDamp:F3} imp={TuneImpulseStrength:F3}");
+                 $"vd={VelDamp:F3} vb={_velocityBlend:F3} imp={TuneImpulseStrength:F3}");
     }
 
     void UploadEffectors()
@@ -518,6 +532,7 @@ public partial class WarpGridManager : Node2D
         float minDim = Mathf.Min(GridSizePixels.X, GridSizePixels.Y);
         bw.Write(GridSizePixels.X / minDim); // grid_aspect.x at offset 56
         bw.Write(GridSizePixels.Y / minDim); // grid_aspect.y at offset 60
+        bw.Write(_velocityBlend);            // Phase 9 velocity_blend at offset 64
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
 

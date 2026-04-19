@@ -33,6 +33,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     float impulse_cap;       // offset 48
     float falloff_scale;     // offset 52 — effector near-field sharpness (lower = tighter)
     vec2  grid_aspect;       // offset 56 — (pixel_w, pixel_h) / min(pixel_w, pixel_h)
+    float velocity_blend;    // offset 64 — Phase 9 Laplacian mix factor (0 = off, 0.15 = default)
 } p;
 
 layout(set = 0, binding = 5, rgba32f) uniform restrict writeonly image2D positions_tex;
@@ -136,29 +137,35 @@ void main() {
     }
 
     // Phase 7: force accumulator is pixel-displacement-per-step (no dt scaling anywhere).
+    // Phase 9 Task 1: capture neighbor velocities from the read buffer for Laplacian blending.
     vec2 force = vec2(0.0);
     float rest_len_x = p.grid_spacing.x * p.rest_length_scale;
     float rest_len_y = p.grid_spacing.y * p.rest_length_scale;
+    vec2 v_left = vec2(0.0), v_right = vec2(0.0), v_up = vec2(0.0), v_down = vec2(0.0);
 
     if (c.x > 0u) {
         NodeState n = r_in.data[idx(uvec2(c.x - 1u, c.y))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
                               rest_len_x, p.stiffness, p.damping);
+        v_left = n.velocity;
     }
     if (c.x + 1u < p.grid_size.x) {
         NodeState n = r_in.data[idx(uvec2(c.x + 1u, c.y))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
                               rest_len_x, p.stiffness, p.damping);
+        v_right = n.velocity;
     }
     if (c.y > 0u) {
         NodeState n = r_in.data[idx(uvec2(c.x, c.y - 1u))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
                               rest_len_y, p.stiffness, p.damping);
+        v_up = n.velocity;
     }
     if (c.y + 1u < p.grid_size.y) {
         NodeState n = r_in.data[idx(uvec2(c.x, c.y + 1u))];
         force += spring_force(me.position, me.velocity, n.position, n.velocity,
                               rest_len_y, p.stiffness, p.damping);
+        v_down = n.velocity;
     }
 
     force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
@@ -180,6 +187,12 @@ void main() {
     // instead of teleporting — the distinction that eliminates shards at high impulse.
     vec2 acc          = force;
     vec2 new_vel      = me.velocity + acc;
+    // Phase 9 Task 1 — Laplacian velocity blend. Couples each node's inertia to its 4-neighbor
+    // average, killing the spatial checkerboard mode that dominates pure-parallel mass-spring
+    // steppers. Boundary neighbors contribute zero (they're pinned) which is handled naturally
+    // by the vec2(0.0) initialization — averages toward zero at edges, no special case needed.
+    vec2 avg_v = (v_left + v_right + v_up + v_down) * 0.25;
+    new_vel    = mix(new_vel, avg_v, p.velocity_blend);
     vec2 displacement = clamp(new_vel, -p.grid_spacing * 0.4, p.grid_spacing * 0.4);
     vec2 new_pos      = me.position + displacement;
     new_vel           = displacement * vel_damp_local;
