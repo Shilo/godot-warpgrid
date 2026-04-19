@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 108; // Phase 6.5: ~10.67 px / cell at 1152 wide — triangle segments short enough to read as curves.
-    int _gridH = 60;  // Phase 6.5: ~10.8  px / cell at 648 tall.
+    int _gridW = 144; // Phase 6.8: 108 -> 144 (visual). 4 visual vertices per physics cell (36 phys × 4 = 144).
+    int _gridH = 80;  // Phase 6.8: 60 -> 80  (visual). 20 phys × 4 = 80.
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW
@@ -68,12 +68,13 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 6.7 "sub-stepped high tension" — stable at 240 Hz internal rate.
-    const float Stiffness     = 35.0f;   // Phase 6.7: 45 -> 35
-    const float Damping       = 0.45f;   // neighbor damping — absorbs energy along spring axis
-    const float RestStiffness = 1.5f;    // Phase 6.7: 0.8 -> 1.5
-    const float RestDamping   = 0.05f;   // Phase 6.7: 0.02 -> 0.05
-    const float VelDamp       = 0.99f;   // Phase 6.6: 0.985 -> 0.99 — high global momentum preservation
+    // Phase 6.8 "high energy 240 Hz" — extreme neighbor stiffness + near-zero damping gives
+    // Geometry-Wars-style snap and propagation. Sub-stepping absorbs the numerical load.
+    const float Stiffness     = 180.0f;  // Phase 6.8: 35 -> 180 — instant cross-mesh propagation
+    const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
+    const float RestStiffness = 0.4f;    // Phase 6.8: 1.5 -> 0.4 — very weak anchor, mesh breathes
+    const float RestDamping   = 0.005f;  // Phase 6.8: 0.05 -> 0.005 — massive elastic overshoot
+    const float VelDamp       = 0.998f;  // Phase 6.8: 0.99 -> 0.998 — per-sub-step (0.998^240 ≈ 0.618/s)
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;

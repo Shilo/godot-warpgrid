@@ -122,11 +122,12 @@ void main() {
         return;
     }
 
-    // Phase 6.6 local damping — inside any effector's radius, scale vel_damp down to 0.6x.
-    // Lower per-tick velocity multiplier = more energy absorbed = "thicker fluid" at the
-    // impact zone. Distant nodes keep full vel_damp and ripple freely. Rest damping is
-    // left untouched so the anchor pull stays consistent.
-    float vel_damp_local = p.vel_damp;
+    // Phase 6.8 "slippery" adaptive damping — INSIDE an effector's radius the node goes
+    // frictionless (vel_damp=1.0) and the anchor pull is slackened (rest_damping ×0.2).
+    // Effect: the mouse "punches" let nodes gain massive momentum locally; once the node
+    // leaves the influence radius, full global damping snaps in and the ripples settle.
+    float rest_damp_local = p.rest_damping;
+    float vel_damp_local  = p.vel_damp;
     for (uint e2 = 0u; e2 < p.effector_count; e2++) {
         WarpEffectorData ed2 = r_eff.data[e2];
         vec2 center2 = (ed2.shape_type == 1u)
@@ -134,7 +135,8 @@ void main() {
             : ed2.start_point;
         vec2 d2v = (me.position - center2) * p.grid_aspect;
         if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
-            vel_damp_local *= 0.6;
+            rest_damp_local *= 0.2;
+            vel_damp_local   = 1.0;
             break;
         }
     }
@@ -164,7 +166,7 @@ void main() {
                               rest_len_y, p.stiffness, p.damping);
     }
 
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * rest_damp_local) * rest_w;
 
     vec2 impulse_v = vec2(0.0);
     for (uint e = 0u; e < p.effector_count; e++) {
