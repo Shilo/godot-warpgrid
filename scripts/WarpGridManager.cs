@@ -68,14 +68,14 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 7.1 "normalized-stretch" — spring_force now divides stretch by rest_length, making
-    // the neighbor coefficient a pure percent-stretch multiplier (resolution-independent).
-    // Constants lowered for 240 Hz sub-stepping density; structural shield tightened to 30% cell.
-    const float Stiffness     = 0.12f;   // Phase 7.1: 0.28 -> 0.12 — pct-stretch neighbor spring
+    // Phase 7.2 "mass-inertial" — raw pixel-stretch springs + acceleration integration.
+    // Forces accumulate into velocity (not displacement), giving nodes real inertia and the
+    // "slide-into-place" feel of Geometry Wars. RestState.weight=1.0 per-node = unit mass.
+    const float Stiffness     = 0.28f;   // Phase 7.2: 0.12 -> 0.28 — Unity pixel-scale neighbor spring
     const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
-    const float RestStiffness = 0.01f;   // Phase 7.1: 0.04 -> 0.01 — weak "liquid" home-pull
-    const float RestDamping   = 0.04f;   // Phase 7.1: 0.06 -> 0.04 — standard anchor absorption
-    const float VelDamp       = 0.94f;   // Phase 7.1: 0.98 -> 0.94 — kills shatter-band vibrations
+    const float RestStiffness = 0.05f;   // Phase 7.2: 0.01 -> 0.05 — weak pull = long-lasting ripples
+    const float RestDamping   = 0.06f;   // Phase 7.2: 0.04 -> 0.06 — kills high-freq jitter
+    const float VelDamp       = 0.98f;   // Phase 7.2: 0.94 -> 0.98 — global momentum preservation
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;

@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 5.0f;    // Phase 7.1 — normalized springs amplify low drive
-    [Export] public float ImpulseStrength = 20.0f;   // Phase 7.1 — pct-stretch math converts small kicks into big ripples
+    [Export] public float ForceStrength   = 0.25f;  // Phase 7.2 — acceleration scale; accumulates over 4 sub-steps
+    [Export] public float ImpulseStrength = 1.5f;   // Phase 7.2 — single-tick acc kick; integrates into ripple
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;
