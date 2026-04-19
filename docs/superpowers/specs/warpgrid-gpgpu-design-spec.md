@@ -314,11 +314,11 @@ Zero per-frame GPU↔CPU transfer beyond the ~1–2 KB parameter/effector upload
 - **Main RD vs local RD.** Compute must share `positions_tex` with the canvas renderer. Local RD would require copy-on-readback or shared-memory tricks. Main RD trivially shares via `Texture2DRD`.
 - **Ping-pong two buffers (not one with RMW).** Single-buffer race would force per-workgroup sync that GLSL compute cannot express without group-scoped barriers. Two-buffer ping-pong is textbook and trivially correct.
 - **Pre-built uniform sets, not rebuilt each frame.** Two sets (A→B, B→A) are allocated once at init. Per-frame allocation would be wasteful and makes `_ExitTree` cleanup ambiguous.
-- **`rg32f` image, not `rgba32f`.** Only `x,y` are needed; halving bandwidth cost. `sampler2D` reads get `.rg` directly.
+- **`rgba32f` image (Phase 4).** Phase 3 used `rg32f` (pos-only). Phase 4 doubled to `rgba32f` so the compute kernel can also emit `(vel.x, vel.y)` alongside position, enabling velocity-proportional glow in the display shader without a second texture or a CPU-side readback.
 - **`canvas_item` shader, not `spatial`.** WarpGrid is 2D; `canvas_item` exposes `VERTEX_ID` and gives the correct `VERTEX → 2D` pipeline without a camera projection matrix layer.
 - **BinaryWriter over blittable C# structs.** Godot's `RenderingDevice.BufferUpdate` takes `byte[]`. `Marshal.StructureToPtr` would work but `BinaryWriter` is simpler and keeps the CPU-side layout visible in code.
 - **`ComputeListAddBarrier` before `ComputeListEnd`.** The barrier API is confusing — it flushes the compute writes such that the _next_ operation in the list (or subsequent graphics pass) can read them. Placing it before `End` makes the canvas render pass's texture read properly sequenced.
-- **Square test grid.** Defers anisotropic-radius fix. Cheap now; can fix in Phase 4 without reworking the test.
+- **Anisotropic fix (Phase 4).** Originally deferred via a square-grid test scene; Phase 4 introduced `grid_aspect` in the UBO + per-axis `rest_len_x`/`rest_len_y` in the spring loop, so rectangular grids no longer distort effector circles or spring tension.
 
 ## 13. Testing
 
@@ -331,12 +331,12 @@ Verification is visual + structural (per-task spec + code quality reviews alread
 
 ## 14. Future Direction
 
-Phase 4 candidates (in priority order):
+Phase 5 candidates (in priority order):
 1. Dynamic `dt` injection (physics tick agnostic).
-2. Effector count > 32 via indirect dispatch or tiled dispatch.
-3. Per-cell rest-anchor weighting for non-uniform "stiffness fields."
-4. Multiple grid instances for layered background effects.
-5. Runtime grid resize (requires full re-init path).
+2. Per-cell rest-anchor weighting for non-uniform "stiffness fields."
+3. Multiple grid instances for layered background effects.
+4. Runtime grid resize (requires full re-init path).
+5. Effector count > 128 via indirect dispatch or tiled dispatch.
 
 ## 15. Phase 4 Changelog
 
