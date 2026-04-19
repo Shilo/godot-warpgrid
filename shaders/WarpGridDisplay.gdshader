@@ -11,15 +11,9 @@ uniform ivec2 grid_dims;
 // Used to offset UV sampling to texel centers for exact endpoint alignment.
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 uniform vec4 line_color : source_color = vec4(0.15, 0.55, 1.0, 1.0);
-uniform float glow_gain : hint_range(0.0, 200.0) = 8.0;
-
-// Phase 8 Task 4 — Tuning Highlight. When a node's velocity magnitude passes shield_warn_speed
-// (in px/step) it is, by definition, saturated against the structural displacement shield in
-// WarpGrid.glsl (displacement clamp ±0.4 cell at vel_damp=0.98 → peak v_speed ≈ 12.5 px/step
-// per axis, ~17.7 both-axes). We flip the line to red and double the glow so the eye can see
-// exactly which zones of the mesh are "breaking" during an auto-tune cycle.
-uniform float shield_warn_speed : hint_range(0.0, 50.0) = 10.0;
-uniform vec4  shield_warn_color : source_color = vec4(1.0, 0.12, 0.12, 1.0);
+// Phase 10 Task 2: glow_gain bumped to 12 for the "neon" arcade feel. The per-channel
+// min(..., 1.0) cap at the end keeps the brightness from blowing out.
+uniform float glow_gain : hint_range(0.0, 200.0) = 12.0;
 
 // Phase 6.1: mutually exclusive render modes.
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).
@@ -46,16 +40,10 @@ void fragment() {
 	// Phase 6.2 — smoothstep-mapped glow: soft ramp to saturation, no harsh knee.
 	float glow = smoothstep(0.0, 1.0, v_speed * glow_gain);
 
-	// Phase 8 Task 4 — structural shield-hit detection. v_speed is bilinearly interpolated so
-	// the red wash bleeds smoothly across cells adjacent to a clamped node (visually: red heat).
-	bool shield_hit = v_speed > shield_warn_speed;
-	vec4 tint = shield_hit ? shield_warn_color : line_color;
-	if (shield_hit) glow *= 2.0;
-
 	if (display_mode == 1) {
-		// Texture mode — pure sprite warp. tint replaces line_color as the sampler modulator.
+		// Texture mode — pure sprite warp. line_color tints the sampled color.
 		vec4 tex_col = texture(main_tex, UV);
-		vec4 base    = tex_col * tint;
+		vec4 base    = tex_col * line_color;
 		vec4 bright  = base * 1.8;
 		bright.a     = base.a;
 		COLOR        = mix(base, bright, glow);
@@ -70,10 +58,10 @@ void fragment() {
 		float edge = min(f.x, 1.0 - f.x);
 		float edge_y = min(f.y, 1.0 - f.y);
 
-		// Phase 6.7 adaptive tapering — lines thin with local velocity (independent of glow knee).
-		// At rest: taper=1.0 (full line width). At peak motion: taper=0.2 (80% thinner).
-		// Masks the underlying straight triangle edges as the mesh ripples.
-		float taper = 1.0 - clamp(v_speed * 1.5, 0.0, 0.8);
+		// Phase 10 Task 2 — relaxed taper. v_speed × 1.2 with a 0.7 ceiling keeps lines
+		// thick enough to stay visible during high-speed ripples; previous 1.5/0.8 could
+		// thin them into invisibility during big warps.
+		float taper = 1.0 - clamp(v_speed * 1.2, 0.0, 0.7);
 
 		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0 * taper, edge);
 		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0 * taper, edge_y);
@@ -88,10 +76,9 @@ void fragment() {
 		float line_mask = max(core, halo);
 
 		vec4 bg      = vec4(line_color.rgb * 0.08, 0.85);      // dark semi-transparent backdrop
-		vec4 line_c  = tint;  // Phase 8 Task 4: shield-hit zones read red, rest-of-mesh reads line_color
-		vec4 bright  = line_c * 1.8;
-		bright.a     = line_c.a;
-		vec4 lit     = mix(line_c, bright, glow);
+		vec4 bright  = line_color * 1.8;
+		bright.a     = line_color.a;
+		vec4 lit     = mix(line_color, bright, glow);
 		COLOR        = mix(bg, lit, line_mask);
 	}
 	// Phase 6.2 — hard cap on each RGB channel. Belt-and-suspenders against the brightness blowout.

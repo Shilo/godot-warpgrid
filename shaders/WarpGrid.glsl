@@ -19,21 +19,19 @@ layout(set = 0, binding = 1, std430) buffer WriteSt  { NodeState data[]; } r_out
 layout(set = 0, binding = 2, std430) restrict readonly  buffer RestBuf  { RestState data[]; } r_rest;
 layout(set = 0, binding = 3, std430) restrict readonly  buffer EffBuf   { WarpEffectorData data[]; } r_eff;
 
+// Phase 10 Task 3 — cleaned UBO: dropped dt, impulse_cap, falloff_scale, grid_aspect (all
+// unreferenced legacy fields from pre-pixel-space phases). 48-byte block, std140-aligned.
 layout(set = 0, binding = 4, std140) uniform GridParams {
     uvec2 grid_size;         // offset 0
     vec2  grid_spacing;      // offset 8
-    float dt;                // offset 16
-    float stiffness;         // offset 20
-    float damping;           // offset 24
-    float rest_stiffness;    // offset 28
-    float rest_damping;      // offset 32
-    float vel_damp;          // offset 36
-    uint  effector_count;    // offset 40
-    float rest_length_scale; // offset 44
-    float impulse_cap;       // offset 48
-    float falloff_scale;     // offset 52 — effector near-field sharpness (lower = tighter)
-    vec2  grid_aspect;       // offset 56 — (pixel_w, pixel_h) / min(pixel_w, pixel_h)
-    float velocity_blend;    // offset 64 — Phase 9 Laplacian mix factor (0 = off, 0.15 = default)
+    float stiffness;         // offset 16
+    float damping;           // offset 20
+    float rest_stiffness;    // offset 24
+    float rest_damping;      // offset 28
+    float vel_damp;          // offset 32
+    uint  effector_count;    // offset 36
+    float rest_length_scale; // offset 40
+    float velocity_blend;    // offset 44 — Phase 9 Laplacian mix factor
 } p;
 
 layout(set = 0, binding = 5, rgba32f) uniform restrict writeonly image2D positions_tex;
