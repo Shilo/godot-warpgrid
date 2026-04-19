@@ -1,6 +1,6 @@
 # WarpGrid GPGPU — Design Specification
 
-**Status:** Phase 3 implementation shipped (see `../plans/2026-04-18-warpgrid-gpgpu-prototype.md`).
+**Status:** Phase 4 shipped (see `../plans/2026-04-18-warpgrid-phase4.md`). Phase 3 baseline: `../plans/2026-04-18-warpgrid-gpgpu-prototype.md`.
 **Target:** Godot 4.6.2-mono, Windows d3d12, Mobile renderer.
 **Authors:** Shilo + Claude (Opus 4.7).
 **Last updated:** 2026-04-18.
@@ -134,7 +134,7 @@ C# mirror: `[StructLayout(LayoutKind.Sequential, Pack = 1)]` with identical fiel
 | 0 | grid_size | uvec2 | `(W, H)` |
 | 8 | grid_spacing | vec2 | `(1/(W-1), 1/(H-1))` normalized |
 | 16 | dt | float | `1/60` |
-| 20 | stiffness | float | 10.0 (calibrated for [0,1] space) |
+| 20 | stiffness | float | 10.0 |
 | 24 | damping | float | 0.45 |
 | 28 | rest_stiffness | float | 6.0 |
 | 32 | rest_damping | float | 0.10 |
@@ -142,8 +142,8 @@ C# mirror: `[StructLayout(LayoutKind.Sequential, Pack = 1)]` with identical fiel
 | 40 | effector_count | uint | |
 | 44 | rest_length_scale | float | 0.95 |
 | 48 | impulse_cap | float | 0.5 |
-| 52 | _pad0 | float | 0 |
-| 56–63 | — | — | block padding (std140 round up to 16-byte multiple of vec4 boundary) |
+| 52 | _pad0 | float | 0 (std140 alignment before vec2 at 56) |
+| 56 | grid_aspect | vec2 | `(pixel_w, pixel_h) / min(pixel_w, pixel_h)` — corrects anisotropic distance |
 
 ### 5.5 Shader bindings (descriptor set 0)
 | Binding | Type | Role |
@@ -180,15 +180,17 @@ f     = stiffness·x - dot(dv, dir)·damping
 force += dir · f
 ```
 
+**Per-axis rest length:** Horizontal neighbors (`±x`) use `rest_len_x = grid_spacing.x * rest_length_scale`; vertical neighbors (`±y`) use `rest_len_y = grid_spacing.y * rest_length_scale`. On square grids they're equal; on rectangular grids each spring sits at its own natural rest length, avoiding the Phase 3 anisotropic-tension warning.
+
 **Rest anchor (pull toward home):**
 ```
 force += (rest - me_pos)·rest_stiffness - me_vel·rest_damping
 ```
 
-**Effectors:** Variable-strength radial falloff. Center is `start_point` (Radial) or closest-point-on-segment (Line). Numerators are calibrated for normalized [0,1] space; denominators control falloff shape.
-- **Radial explosive** (`shape==0, start==end`): `2.5·S·d / (10000·sp² + |d|²)`
+**Effectors:** Variable-strength radial falloff. Center is `start_point` (Radial) or closest-point-on-segment (Line). Delta is aspect-corrected — `d = (node_pos - center) * grid_aspect` — so a pixel-defined radius (normalized by the grid's shorter pixel dimension) maps to a true circle on rectangular grids. Falloff denominators use `d2 = dot(d, d)`; force direction uses the raw (non-corrected) delta so push vectors stay geometrically correct.
+- **Radial explosive** (`shape==0, start==end`): `2.5·S·d_raw / (10000·sp² + |d|²)`
 - **Radial directed** (`shape==0, start≠end`): `1.0·S / (10·sp + |d|) · normalize(end-start)`
-- **Line explosive** (`shape==1`): `2.5·S·d / (10000·sp² + |d|²)` with center = closest point on segment.
+- **Line explosive** (`shape==1`): `2.5·S·d_raw / (10000·sp² + |d|²)` with center = closest point on segment.
 
 Behavior routing:
 - **Force** (`behavior==0`): accumulates into `force` (applied via `F·dt`).
@@ -217,16 +219,22 @@ Static `ArrayMesh` built once in `_Ready`:
 - Primitive: `Mesh.PrimitiveType.Lines`.
 - For 100×100: 19,800 segments, 39,600 indices. No triangles.
 
-### 7.2 Zero-readback displacement
+### 7.2 Zero-readback displacement + velocity glow
 `WarpGridDisplay.gdshader` (canvas_item):
-```glsl
+````glsl
 int w = grid_dims.x;
 int id = int(VERTEX_ID);
 ivec2 c = ivec2(id - (id / w) * w, id / w);
-vec2 p = texelFetch(positions_tex, c, 0).rg;
+vec4  s = texelFetch(positions_tex, c, 0);
+vec2  p = s.rg;
+vec2  v = s.ba;
 VERTEX = p * grid_size_pixels;
-```
-`VERTEX_ID` in `canvas_item` vertex shader is the linear index into the mesh's vertex buffer — matching the exact `y*W + x` order used by `MeshHelper.BuildGridVertices`. Vertex N reads texel `(N%W, N/W)` (expressed via subtraction to avoid the `%` operator) and gets the compute shader's latest position.
+
+float speed = length(v);
+float glow  = clamp(speed * glow_gain, 0.0, 1.0);
+COLOR = mix(line_color, vec4(1.0), glow);
+````
+`positions_tex` is `rgba32f`; compute kernel writes `(pos, vel)` to `.rgba`, display shader reads both. `glow_gain` is a canvas-shader uniform (default 60).
 
 ### 7.3 Resource bridging: Texture2DRD
 `Texture2DRD` is a `Resource` wrapper that holds a non-owning RID reference to an RD-created texture. Setting `TextureRdRid = _imgPositions` lets a standard `ShaderMaterial` parameter slot accept it as a `sampler2D`. The underlying image is still owned by the manager's RD; the manager must keep it alive for the lifetime of any material using it, and free it in `_ExitTree`.
@@ -295,12 +303,11 @@ Zero per-frame GPU↔CPU transfer beyond the ~1–2 KB parameter/effector upload
 
 ## 11. Known Limitations (deferred to Phase 4)
 
-1. **Anisotropic on non-square grids** — `Radius` normalized by `gridSizePixels.X` only; `rest_len` uses `grid_spacing.x`. Current runtime warns via `PushWarning`. Phase 4 fix: per-axis normalization, or pick `min(x, y)` consistently across effector + spring paths.
-2. **Fixed `Dt = 1/60`** — ignores `Engine.PhysicsTicksPerSecond` changes. Phase 4 fix: pass `delta` into UBO each frame.
-3. **No runtime grid resize** — uniform sets embed RIDs. Resize requires full teardown + re-init. Acceptable.
-4. **No adaptive substepping** — strengths beyond plan values may overshoot CFL per frame. Phase 4 (if needed): 2-substep inner loop in compute shader.
-5. **No interior anchor weighting** — uniform `rest_stiffness` across grid. XNA reference uses 3×3 loose anchor pattern. Phase 4 (if needed): add per-cell `k` to `RestState` (16 B/rest).
-6. **Line count scaling** — 19,800 segments is fine. At 200×200 (79,400 segments) consider batching or instanced rendering.
+1. **Fixed `Dt = 1/60`** — ignores `Engine.PhysicsTicksPerSecond` changes. Phase 4 fix: pass `delta` into UBO each frame.
+2. **No runtime grid resize** — uniform sets embed RIDs. Resize requires full teardown + re-init. Acceptable.
+3. **No adaptive substepping** — strengths beyond plan values may overshoot CFL per frame. Phase 4 (if needed): 2-substep inner loop in compute shader.
+4. **No interior anchor weighting** — uniform `rest_stiffness` across grid. XNA reference uses 3×3 loose anchor pattern. Phase 4 (if needed): add per-cell `k` to `RestState` (16 B/rest).
+5. **Line count scaling** — 19,800 segments is fine. At 200×200 (79,400 segments) consider batching or instanced rendering.
 
 ## 12. Design Decisions Log
 
@@ -325,9 +332,20 @@ Verification is visual + structural (per-task spec + code quality reviews alread
 ## 14. Future Direction
 
 Phase 4 candidates (in priority order):
-1. Per-axis normalization fix (unlocks rectangular grids for wide-aspect games).
-2. Dynamic `dt` injection (physics tick agnostic).
-3. Effector count > 32 via indirect dispatch or tiled dispatch.
-4. Per-cell rest-anchor weighting for non-uniform "stiffness fields."
-5. Multiple grid instances for layered background effects.
-6. Runtime grid resize (requires full re-init path).
+1. Dynamic `dt` injection (physics tick agnostic).
+2. Effector count > 32 via indirect dispatch or tiled dispatch.
+3. Per-cell rest-anchor weighting for non-uniform "stiffness fields."
+4. Multiple grid instances for layered background effects.
+5. Runtime grid resize (requires full re-init path).
+
+## 15. Phase 4 Changelog
+
+Shipped in Phase 4 (2026-04-18):
+- **Binding 1 SSBO reflection fix** (`d2b74b6`) — dropped `restrict writeonly` qualifiers on bindings 0/1; Godot 4.6.2 SPIR-V reflection was misclassifying `writeonly buffer` as a texture type.
+- **Effector auto-registration** via `warp_effectors` group; manager drops `Effectors` NodePath export.
+- **AABB culling** — effectors outside the grid's world bounds skipped before GPU upload.
+- **Per-axis anisotropy fix** — `grid_aspect` UBO field + aspect-corrected effector distance + per-axis spring rest_len.
+- **MaxEffectors 32 → 128.**
+- **Velocity channel** — `positions_tex` upgraded to `rgba32f`; compute writes `(pos, vel)`.
+- **Velocity glow** in display shader — line brightness scales with local speed.
+- **README tuning guide** at repo root.
