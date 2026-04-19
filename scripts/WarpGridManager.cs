@@ -123,7 +123,7 @@ public partial class WarpGridManager : Node2D
     //     (2) maxVel          — peak per-node velocity magnitude (instability detector)
     //     (3) Shatter count   — informational: nodes displaced > 50% of grid_spacing from rest
     [Export] public bool  TuningMode          = true;     // Phase 8 Task 4: start ON
-    [Export] public float ResonanceThreshold  = 0.001f;   // Phase 9 Task 2: ultra-tight filter
+    [Export] public float ResonanceThreshold  = 0.01f;    // Phase 9.1 Task 2: relaxed baseline — scaling applies in test
     [Export] public float TunePulseRadius     = 150.0f;
     [Export] public float TuneImpulseStrength = 200.0f;   // Phase 9 Task 3: "snappy" seed
     int   _tuneFrameCount = 0;
@@ -383,9 +383,13 @@ public partial class WarpGridManager : Node2D
         //   (4) shatter OR resonance → Damping +0.02, RestDamping +0.05 (blocked by cooldown)
         //   (5) 2-cycle calm + d<2√k → Stiffness ×1.05, RestDamping -0.01 (hunt hi-tension lo-friction)
         // Post-adjust: Stiffness floor 0.005, RestDamping floor 0, critical-damping cap on Damping.
-        bool shatterTripped   = shatter > 0;
-        bool resonanceTripped = resonance > ResonanceThreshold;
-        bool maxVelTripped    = maxVel > 10.0f;
+        // Phase 9.1 Task 1 — dynamic resonance threshold. Scales with k so acceptable "jiggle"
+        // grows as the mesh gets stiffer: at k=0.02 the gate is ~2× baseline; at k=0.2 it's ~11×.
+        // Prevents microscopic Laplacian-suppressible ripples from halting the hi-tension hunt.
+        float dynamicThreshold = ResonanceThreshold * (1.0f + Stiffness * 50.0f);
+        bool shatterTripped    = shatter > 0;
+        bool resonanceTripped  = resonance > dynamicThreshold;
+        bool maxVelTripped     = maxVel > 10.0f;
         bool impulseNegligible = TuneImpulseStrength < 1.0f; // Phase 8.4 Task 3
         bool anomaly          = shatterTripped || resonanceTripped || maxVelTripped;
 
@@ -429,11 +433,16 @@ public partial class WarpGridManager : Node2D
             // so strict inequality starves the climb forever. At == we're on the under/critical
             // boundary (physically "fastest decay without oscillation"), which is fine to climb
             // from: higher k next cycle means higher cap, opening fresh headroom organically.
+            // Phase 9.1 Task 3/4 — aggressive climb to find the Laplacian wall:
+            //   k   × 1.10 (up from 1.05 — push hard, find the real ceiling)
+            //   vb  − 0.01 (up from 0.005 — bleed Laplacian faster, trust dynamic gate)
+            //   imp × 1.05 (new — scale impulse so stress test matches current stiffness)
             if (_calmStreak >= 2 && Damping <= 2.0f * MathF.Sqrt(Stiffness))
             {
-                Stiffness     *= 1.05f;
-                RestDamping   -= 0.01f;
-                _velocityBlend = MathF.Max(_velocityBlend - 0.005f, VelocityBlendFloor);
+                Stiffness           *= 1.10f;
+                TuneImpulseStrength *= 1.05f;
+                RestDamping         -= 0.01f;
+                _velocityBlend       = MathF.Max(_velocityBlend - 0.01f, VelocityBlendFloor);
             }
         }
 
