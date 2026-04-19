@@ -8,9 +8,30 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpGridManager : Node2D
 {
-    [Export] public int GridW = 100;
-    [Export] public int GridH = 100;
-    [Export] public Vector2 GridSizePixels = new(1000, 1000);
+    // v5: GridW/GridH/GridSizePixels are properties so runtime changes trigger Rebuild().
+    // Field initializers set the backing fields directly — no setter invocation during
+    // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
+    // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
+    int _gridW = 100;
+    int _gridH = 100;
+    Vector2 _gridSizePixels = new(1000, 1000);
+
+    [Export] public int GridW
+    {
+        get => _gridW;
+        set { if (_gridW == value) return; _gridW = value; MaybeRebuild(); }
+    }
+    [Export] public int GridH
+    {
+        get => _gridH;
+        set { if (_gridH == value) return; _gridH = value; MaybeRebuild(); }
+    }
+    [Export] public Vector2 GridSizePixels
+    {
+        get => _gridSizePixels;
+        set { if (_gridSizePixels == value) return; _gridSizePixels = value; MaybeRebuild(); }
+    }
+
     // Effectors self-register into the "warp_effectors" group (see WarpEffector.Group).
     // The manager fetches them each physics tick; no manual wiring via Inspector.
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
@@ -278,6 +299,38 @@ public partial class WarpGridManager : Node2D
 
     public override void _ExitTree()
     {
+        TeardownGpu();
+    }
+
+    /// <summary>
+    /// v5: tear down all RD resources + the mesh child, then re-run BuildMesh + InitGpu
+    /// + BuildMaterial from scratch. Called automatically when GridW / GridH / GridSizePixels
+    /// change at runtime; can also be called manually after overriding RestAnchorWeight to
+    /// re-bake a new softness map. Clears the accumulator and resets ping-pong state.
+    /// </summary>
+    public void Rebuild()
+    {
+        TeardownGpu();
+        if (_meshInstance != null) { _meshInstance.Free(); _meshInstance = null; }
+        _mesh = null;
+        _material = null;
+        _positionsTexture = null;
+        _readIsA = true;
+        _accum = 0;
+        BuildMesh();
+        InitGpu();
+        BuildMaterial();
+    }
+
+    void MaybeRebuild()
+    {
+        // Guard against setter invocations during Godot's scene deserialization (pre-_Ready,
+        // _rd is still null). Also no-op while we're in the middle of TeardownGpu.
+        if (_rd != null) Rebuild();
+    }
+
+    void TeardownGpu()
+    {
         if (_rd == null) return;
         // Crash-safety: guard each RID so partial InitGpu failure (mid-construction) cleans up safely.
         FreeIfValid(_uniformSetA); FreeIfValid(_uniformSetB);
@@ -286,6 +339,12 @@ public partial class WarpGridManager : Node2D
         FreeIfValid(_bufRest);     FreeIfValid(_bufEff);
         FreeIfValid(_bufParams);
         FreeIfValid(_pipeline);    FreeIfValid(_shader);
+        _uniformSetA = default; _uniformSetB = default;
+        _imgPositions = default;
+        _bufStateA = default; _bufStateB = default;
+        _bufRest = default; _bufEff = default;
+        _bufParams = default;
+        _pipeline = default; _shader = default;
         _rd = null;
     }
 
