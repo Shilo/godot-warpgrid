@@ -41,6 +41,9 @@ uint idx(uvec2 c) { return c.y * p.grid_size.x + c.x; }
 
 vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
                   float rest_len, float k, float c) {
+    // Phase 6.2: guard against rest_len==0 — would imply two nodes sharing the same
+    // anchor, producing degenerate delta=0 jitter under any perturbation.
+    if (rest_len < 1e-9) return vec2(0.0);
     vec2  delta = other_pos - me_pos;
     float len   = length(delta);
     if (len < 1e-7) return vec2(0.0);
@@ -75,26 +78,27 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
     float d2    = dot(d, d);
     if (d2 > e.radius * e.radius) return vec2(0.0);
 
-    // Phase 6.1: normalized Gaussian falloff.
-    //   sigma = radius * 0.5 → peak force at center, smooth rolloff to ~0.14 at the cutoff.
-    //   Dividing d_raw by sigma makes the force scale radius-invariant: halving Radius
-    //   no longer halves the effective force amplitude (avoids sharp vertex spikes when
-    //   a small-radius effector sits near a node).
-    //   Peak magnitude bound: at d = sigma, |force| = 2.5 * strength * e^(-0.5) ≈ 1.52 * strength.
+    // Phase 6.2: Gaussian hump — magnitude is purely a Gaussian of distance, direction is a unit
+    //   vector so the force profile is a smooth bubble with a defined peak at the center.
+    //   sigma = radius * 0.5 places ~0.61× peak at half-radius, ~0.14× peak at the cutoff.
     float sigma = max(e.radius, 1e-4) * 0.5;
-    float gauss = exp(-d2 / (2.0 * sigma * sigma));
+    float gauss = e.strength * exp(-d2 / (2.0 * sigma * sigma));
 
     if (e.shape_type == 0u) {
         vec2 dir_vec = e.end_point - e.start_point;
         if (dot(dir_vec, dir_vec) > 1e-10) {
-            // Radial-Directed — constant direction, normalized Gaussian magnitude envelope.
-            return e.strength * gauss * normalize(dir_vec);
+            // Radial-Directed — constant direction, Gaussian magnitude envelope.
+            return gauss * normalize(dir_vec);
         }
-        // Radial-Explosive — outward from center; d_raw / sigma keeps force bubble radius-invariant.
-        return 2.5 * e.strength * gauss * (d_raw / sigma);
+        // Radial-Explosive — outward from center.
+        float len = length(d_raw);
+        if (len < 1e-6) return vec2(0.0);
+        return gauss * (d_raw / len);
     }
     // Line-Explosive — outward from closest segment point.
-    return 2.5 * e.strength * gauss * (d_raw / sigma);
+    float len = length(d_raw);
+    if (len < 1e-6) return vec2(0.0);
+    return gauss * (d_raw / len);
 }
 
 void main() {
@@ -160,6 +164,9 @@ void main() {
 
     vec2 new_vel = me.velocity + force * p.dt + impulse_v;
     new_vel *= p.vel_damp;
+    // Phase 6.2 safety speed limit — single-frame hitch can't teleport vertices and tear the mesh.
+    // Bound chosen well above peak impulse-cap velocity (~30) ... scaled to normalized coords.
+    new_vel = clamp(new_vel, vec2(-2.0), vec2(2.0));
     if (length(new_vel) < 1e-4) new_vel = vec2(0.0);
     vec2 new_pos = me.position + new_vel * p.dt;
 

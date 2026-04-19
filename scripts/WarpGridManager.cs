@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 100;
-    int _gridH = 100;
+    int _gridW = 64;  // Phase 6.2: 100 -> 64 (cell count). Paired with GridH=36 at 16:9.
+    int _gridH = 36;  // Phase 6.2: 100 -> 36. Higher cell density than Phase 5 for curved-looking lines.
     Vector2 _gridSizePixels = new(1000, 1000);
 
     [Export] public int GridW
@@ -62,12 +62,13 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6.1 fluidity calibration — more energy transfer, weaker anchor, longer ripple tails.
-    const float Stiffness     = 24.0f;   // Phase 6.1: 18 -> 24 — stronger neighbor pull, deeper propagation
+    // Phase 6.2 "safe fluid" calibration — dial back the whip effect, strengthen the home pull,
+    // and restore viscosity so 2-3 bounces settle cleanly instead of spiraling into jagged lines.
+    const float Stiffness     = 10.0f;   // Phase 6.2: 24 -> 10 — kills the whip; soft propagation only
     const float Damping       = 0.45f;
-    const float RestStiffness = 3.0f;    // Phase 6.1: 4.5 -> 3.0 — weaker anchor lets waves reach edges
-    const float RestDamping   = 0.2f;    // Phase 6.1: 0.4 -> 0.2 — oscillate past home 2-3 times
-    const float VelDamp       = 0.99f;   // Phase 6.1: 0.985 -> 0.99 — preserve momentum longer
+    const float RestStiffness = 8.0f;    // Phase 6.2: 3 -> 8 — strong home pull prevents cross-overs
+    const float RestDamping   = 1.2f;    // Phase 6.2: 0.2 -> 1.2 — viscosity settles the mesh after bounces
+    const float VelDamp       = 0.92f;   // Phase 6.2: 0.99 -> 0.92 — breaks feedback-loop momentum buildup
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;

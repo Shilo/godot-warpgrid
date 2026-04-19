@@ -7,7 +7,7 @@ namespace WarpGrid;
 public partial class WarpMouseController : Node2D
 {
     [Export] public float ForceStrength = 15.0f;
-    [Export] public float ImpulseStrength = 150.0f; // Phase 6.1: 250 -> 150; 250 blew out brightness, 150 still triggers global ripple through normalized Gaussian
+    [Export] public float ImpulseStrength = 100.0f; // Phase 6.2: 150 -> 100 — paired with safe-fluid physics, 100 still triggers global ripple without mesh explosion
     [Export] public float CursorRadius = 400.0f;    // Bubble wide enough that right-click repulsion + left-click well span several cells
 
     private WarpEffector _effector;

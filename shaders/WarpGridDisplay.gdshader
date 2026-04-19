@@ -26,32 +26,34 @@ void vertex() {
 }
 
 void fragment() {
-	// Glow capped at 0.6 to preserve hue — prevents full-white blowout at peak velocity.
-	float glow = clamp(v_speed * glow_gain, 0.0, 0.6);
+	// Phase 6.2 — smoothstep-mapped glow: soft ramp to saturation, no harsh knee.
+	float glow = smoothstep(0.0, 1.0, v_speed * glow_gain);
 
 	if (display_mode == 1) {
 		// Texture mode — pure sprite warp. line_color tints the sampled color.
 		vec4 tex_col = texture(main_tex, UV);
 		vec4 base    = tex_col * line_color;
-		vec4 bright  = clamp(base * 1.8, vec4(0.0), vec4(1.0, 1.0, 1.0, base.a));
+		vec4 bright  = base * 1.8;
 		bright.a     = base.a;
 		COLOR        = mix(base, bright, glow);
 	} else {
 		// Grid mode — procedural UV lines via fract + smoothstep.
-		// fract(UV * grid_dims) repeats 0..1 once per cell; we detect proximity to 0 or 1
-		// edges as the line. Width scales with derivative so lines stay ~constant pixel width.
+		// fract(UV * grid_dims) repeats 0..1 once per cell. df.* * 2.0 widens edges into
+		// soft "tubes" / "glow-wires" instead of razor-thin lines.
 		vec2 cells = vec2(grid_dims);
 		vec2 f     = fract(UV * cells);
 		vec2 df    = fwidth(UV * cells);
-		float line_x = 1.0 - smoothstep(0.0, df.x * 1.5, min(f.x, 1.0 - f.x));
-		float line_y = 1.0 - smoothstep(0.0, df.y * 1.5, min(f.y, 1.0 - f.y));
+		float line_x = 1.0 - smoothstep(0.0, df.x * 2.0, min(f.x, 1.0 - f.x));
+		float line_y = 1.0 - smoothstep(0.0, df.y * 2.0, min(f.y, 1.0 - f.y));
 		float line_mask = clamp(line_x + line_y, 0.0, 1.0);
 
 		vec4 bg      = vec4(line_color.rgb * 0.08, 0.85);      // dark semi-transparent backdrop
 		vec4 line_c  = line_color;
-		vec4 bright  = clamp(line_c * 1.8, vec4(0.0), vec4(1.0, 1.0, 1.0, line_c.a));
+		vec4 bright  = line_c * 1.8;
 		bright.a     = line_c.a;
 		vec4 lit     = mix(line_c, bright, glow);
 		COLOR        = mix(bg, lit, line_mask);
 	}
+	// Phase 6.2 — hard cap on each RGB channel. Belt-and-suspenders against the brightness blowout.
+	COLOR.rgb = min(COLOR.rgb, vec3(1.0));
 }
