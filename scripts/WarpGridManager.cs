@@ -68,17 +68,17 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 11 "Dampened Arcade" — constants re-tuned for the 0.15 structural speed limit.
-    // The tighter clamp changes the effective transfer function: stiffness now needs to be
-    // lower (parallel-equivalent of Unity's 0.28 is 0.04), damping higher to absorb parallel
-    // overshoot, and Laplacian blend stronger for inter-node coordination at 240 Hz.
-    [Export] public float Stiffness     = 0.04f;   // Phase 11 Task 2 — parallel-equivalent of Unity 0.28
-    [Export] public float Damping       = 0.8f;    // Phase 11 Task 2 — absorbs parallel overshoot
+    // Phase 12 "Stable Arcade" — paradox realized: high neighbor damping CAUSES shatter on GPU.
+    // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
+    // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
+    // and global decay (vd=0.92) — keep neighbor damping minimal.
+    [Export] public float Stiffness     = 0.04f;   // parallel-equivalent of Unity 0.28
+    [Export] public float Damping       = 0.05f;   // Phase 12 Task 3 — LOW, high d causes GPU shatter
     [Export] public float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
-    [Export] public float RestDamping   = 0.65f;   // tuner's "Quiet Grid" damping
-    [Export] public float VelDamp       = 0.94f;   // Phase 11 Task 2 — aggressive decay, no "singing"
+    [Export] public float RestDamping   = 0.65f;   // quiet grid
+    [Export] public float VelDamp       = 0.92f;   // Phase 12 Task 3 — aggressive global decay
     // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
-    [Export] public float VelocityBlend = 0.25f;   // Phase 11 Task 2 — stronger parallel coordination
+    [Export] public float VelocityBlend = 0.3f;    // Phase 12 Task 3 — heavy smoothing, force coordination
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
     const int   SubSteps     = 4;
     const float RestLenScale = 0.95f;

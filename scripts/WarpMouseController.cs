@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 0.05f;  // Phase 11 Task 3 — de-escalated from 0.25, no longer saturates clamp
-    [Export] public float ImpulseStrength = 0.25f;  // Phase 11 Task 3 — de-escalated from 1.5
+    [Export] public float ForceStrength   = 0.02f;  // Phase 12 Task 4 — smooth ripples within Zero-Crossover limit
+    [Export] public float ImpulseStrength = 0.1f;   // Phase 12 Task 4
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;

@@ -191,11 +191,10 @@ void main() {
     // by the vec2(0.0) initialization — averages toward zero at edges, no special case needed.
     vec2 avg_v = (v_left + v_right + v_up + v_down) * 0.25;
     new_vel    = mix(new_vel, avg_v, p.velocity_blend);
-    // Phase 11 Task 1 — Structural Speed Limit. 0.15 × 32 px spacing = 4.8 px per sub-step max.
-    // 4.8 px × 4 sub-steps = 19.2 px per engine frame (< 32 px cell). A node CANNOT cross into
-    // a neighbor's territory within one frame → parallel vertex-swap shattering is now
-    // mathematically impossible.
-    vec2 displacement = clamp(new_vel, -p.grid_spacing * 0.15, p.grid_spacing * 0.15);
+    // Phase 12 Task 1 — Zero-Crossover Clamp. 0.1 × 32 px = 3.2 px per sub-step max.
+    // 3.2 × 4 sub-steps = 12.8 px per engine frame (< 32 px cell, 40% headroom).
+    // VERTEX SWAPPING IS NOW MATHEMATICALLY IMPOSSIBLE.
+    vec2 displacement = clamp(new_vel, -p.grid_spacing * 0.1, p.grid_spacing * 0.1);
     vec2 new_pos      = me.position + displacement;
     new_vel           = displacement * vel_damp_local;
 
