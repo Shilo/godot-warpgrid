@@ -65,26 +65,32 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
         ? closest_on_segment(e.start_point, e.end_point, node_pos)
         : e.start_point;
 
-    vec2  d  = node_pos - center;
-    float d2 = dot(d, d);
+    // Aspect-corrected delta: multiply by grid_aspect so a pixel-defined radius
+    // maps to a true circle (not an ellipse) on rectangular grids.
+    // grid_aspect = pixel_size / min(pixel_size), so the short axis stays 1.0
+    // and the long axis scales up. Radius was normalized by min-dim in WarpEffector.ToData,
+    // so comparing |corrected_delta| against e.radius is a consistent metric.
+    vec2  d_raw = node_pos - center;
+    vec2  d     = d_raw * p.grid_aspect;
+    float d2    = dot(d, d);
     if (d2 > e.radius * e.radius) return vec2(0.0);
 
-    // Magnitude multipliers calibrated for normalized [0,1] space.
-    // Original pixel-space values (100.0/10.0) overshoot severely in this range.
+    // Force magnitude still driven by corrected distance; direction vector uses raw delta
+    // so the push acts along the geometric line from center to node (not the stretched one).
     if (e.shape_type == 0u) {
         vec2 dir_vec = e.end_point - e.start_point;
         if (dot(dir_vec, dir_vec) > 1e-10) {
-            // Radial-Directed: was 10.0 * strength / (10*sp + dist)
+            // Radial-Directed
             float dist = sqrt(d2);
             return 1.0 * e.strength / (10.0 * p.grid_spacing.x + dist) * normalize(dir_vec);
         }
-        // Radial-Explosive: was 100.0 * strength * d / (10000*sp² + d²)
+        // Radial-Explosive — push outward along raw delta; magnitude falls off with corrected distance.
         float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
-        return 2.5 * e.strength * d / denom;
+        return 2.5 * e.strength * d_raw / denom;
     }
-    // Line-Explosive: was 100.0 * strength * d / (10000*sp² + d²)
+    // Line-Explosive
     float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
-    return 2.5 * e.strength * d / denom;
+    return 2.5 * e.strength * d_raw / denom;
 }
 
 void main() {
