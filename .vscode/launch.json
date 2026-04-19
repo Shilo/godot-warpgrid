@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Play",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${env:GODOT}",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Play (Editor)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${env:GODOT}",
+            "args": ["--editor"],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false
+        }
+    ]
+}
