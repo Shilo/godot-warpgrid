@@ -11,7 +11,8 @@ public partial class WarpGridManager : Node2D
     [Export] public int GridW = 100;
     [Export] public int GridH = 100;
     [Export] public Vector2 GridSizePixels = new(1000, 1000);
-    [Export] public Godot.Collections.Array<NodePath> Effectors = new();
+    // Effectors self-register into the "warp_effectors" group (see WarpEffector.Group).
+    // The manager fetches them each physics tick; no manual wiring via Inspector.
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
 
     // Tuned for normalized [0,1] grid space (not pixel space).
@@ -182,19 +183,26 @@ public partial class WarpGridManager : Node2D
     void UploadEffectors()
     {
         // std430 SSBO layout — order-critical, must match WarpEffectorData struct in WarpGrid.glsl.
-        // BinaryWriter writes little-endian (all Godot-supported platforms) which matches GPU expectation.
         Array.Clear(_effScratch, 0, _effScratch.Length);
         int count = 0;
-        var origin = GlobalPosition;
+        var gridOrigin = GlobalPosition;
+        var gridMin = gridOrigin;
+        var gridMax = gridOrigin + GridSizePixels;
 
         using var ms = new MemoryStream(_effScratch);
         using var bw = new BinaryWriter(ms);
-        foreach (var path in Effectors)
+        foreach (Node n in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (count >= MaxEffectors) break;
-            var node = GetNodeOrNull<WarpEffector>(path);
-            if (node == null) continue;
-            var d = node.ToData(origin, GridSizePixels);
+            if (n is not WarpEffector eff) continue;
+
+            // AABB cull: skip effectors whose influence box can't touch the grid.
+            var p = eff.GlobalPosition;
+            float r = eff.Radius;
+            if (p.X + r < gridMin.X || p.X - r > gridMax.X) continue;
+            if (p.Y + r < gridMin.Y || p.Y - r > gridMax.Y) continue;
+
+            var d = eff.ToData(gridOrigin, GridSizePixels);
             bw.Write(d.StartPoint.X);  bw.Write(d.StartPoint.Y);
             bw.Write(d.EndPoint.X);    bw.Write(d.EndPoint.Y);
             bw.Write(d.Radius);

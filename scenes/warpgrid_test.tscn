@@ -7,13 +7,11 @@
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
-Effectors = [NodePath("Effector1")]
 
 [node name="Effector1" type="Node2D" parent="WarpGridManager" unique_id=1992371321]
 visible = false
 position = Vector2(500, 500)
 script = ExtResource("2_eff")
-Strength = 0.01
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=1388231658]
 position = Vector2(500, 500)
