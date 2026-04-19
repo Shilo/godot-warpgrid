@@ -13,7 +13,7 @@ Effectors = [NodePath("Effector1")]
 visible = false
 position = Vector2(500, 500)
 script = ExtResource("2_eff")
-Strength = 0.1
+Strength = 0.01
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=1388231658]
 position = Vector2(500, 500)

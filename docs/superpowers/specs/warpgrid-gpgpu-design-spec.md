@@ -134,11 +134,11 @@ C# mirror: `[StructLayout(LayoutKind.Sequential, Pack = 1)]` with identical fiel
 | 0 | grid_size | uvec2 | `(W, H)` |
 | 8 | grid_spacing | vec2 | `(1/(W-1), 1/(H-1))` normalized |
 | 16 | dt | float | `1/60` |
-| 20 | stiffness | float | 0.28 |
-| 24 | damping | float | 0.06 |
-| 28 | rest_stiffness | float | 0.10 |
+| 20 | stiffness | float | 10.0 (calibrated for [0,1] space) |
+| 24 | damping | float | 0.45 |
+| 28 | rest_stiffness | float | 6.0 |
 | 32 | rest_damping | float | 0.10 |
-| 36 | vel_damp | float | 0.98 |
+| 36 | vel_damp | float | 0.92 |
 | 40 | effector_count | uint | |
 | 44 | rest_length_scale | float | 0.95 |
 | 48 | impulse_cap | float | 0.5 |
@@ -185,10 +185,10 @@ force += dir · f
 force += (rest - me_pos)·rest_stiffness - me_vel·rest_damping
 ```
 
-**Effectors:** Variable-strength radial falloff. Center is `start_point` (Radial) or closest-point-on-segment (Line).
-- **Radial explosive** (`shape==0, start==end`): `100·S·d / (10000·sp² + |d|²)`
-- **Radial directed** (`shape==0, start≠end`): `10·S / (10·sp + |d|) · normalize(end-start)`
-- **Line explosive/directed** (`shape==1`): same explosive form applied with center = closest point on segment.
+**Effectors:** Variable-strength radial falloff. Center is `start_point` (Radial) or closest-point-on-segment (Line). Numerators are calibrated for normalized [0,1] space; denominators control falloff shape.
+- **Radial explosive** (`shape==0, start==end`): `2.5·S·d / (10000·sp² + |d|²)`
+- **Radial directed** (`shape==0, start≠end`): `1.0·S / (10·sp + |d|) · normalize(end-start)`
+- **Line explosive** (`shape==1`): `2.5·S·d / (10000·sp² + |d|²)` with center = closest point on segment.
 
 Behavior routing:
 - **Force** (`behavior==0`): accumulates into `force` (applied via `F·dt`).
@@ -204,7 +204,7 @@ For a 4-neighbor mass-spring lattice with mass=1, the CFL stability limit is:
 k_max = 1 / (dt² · neighbors) = 1 / (1/60)² / 4 ≈ 3600
 ```
 
-Current `stiffness = 0.28` sits four orders of magnitude below this limit — extreme safety margin. Risk is over-damping, not divergence. Three damping sources (spring axial, rest anchor, global `vel_damp = 0.98`) are all dissipative.
+Current `stiffness = 10.0` sits ~2 orders of magnitude below the CFL limit — comfortable safety margin. The earlier value of `0.28` was a mis-calibration from pixel-space (where distances are ~1000) to normalized space (where distances are ~1.0), producing an "underwater" feel. Three damping sources (spring axial `0.45`, rest anchor `0.10`, global `vel_damp = 0.92`) are all dissipative; `0.92^60 ≈ 0.007` per second gives ~99% decay in 1 second (target: 0.5–1.0s ring before snap-to-zero).
 
 **Impulse CFL cap:** One-frame impulse magnitude is clamped to `impulse_cap / dt = 30` (normalized units/s). Without this, a high-strength effector could inject one-frame velocity spikes that violate the CFL condition for the next step.
 

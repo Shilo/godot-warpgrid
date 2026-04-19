@@ -69,21 +69,20 @@ The line-connectivity index pattern is the single piece of "wiring" that produce
 |---|---|---|
 | `GRID_W × GRID_H` | 100×100 | 10,000 nodes |
 | Workgroup | 8×8 | dispatch = ceil(100/8) = 13×13 = 169 groups |
-| Main spring stiffness | `0.28` | |
-| Main spring damping | `0.06` | |
-| Rest-anchor stiffness | `0.10` | pull toward home |
+| Main spring stiffness | `10.0` | calibrated for [0,1] space (was 0.28 — too weak) |
+| Main spring damping | `0.45` | prevents "crunchy" with higher k (was 0.06) |
+| Rest-anchor stiffness | `6.0` | snappy pull home (was 0.10) |
 | Rest-anchor damping | `0.10` | |
-| Velocity damp/frame | `0.98` | |
+| Velocity damp/frame | `0.92` | less floaty; 99% decay in ~1s (was 0.98) |
 | Velocity snap threshold | `1e-4` | in normalized space |
 | Rest length scale | `0.95` | target = 0.95 × initial spacing — produces the taut-membrane tension |
 | dt | `1/60` | fixed `_PhysicsProcess` |
 | Impulse force cap | `F*dt ≤ 0.5` | per audit: prevent CFL overshoot from big effectors |
 
-Effector force formulas (normalized grid space, `sp = grid_spacing.x`):
-- **Radial-Explosive:** `100 * strength * (node - p) / (10000*sp² + d²)`
-- **Radial-Implosive:** `10  * strength * (p - node)  / (100*sp² + d²)`
-- **Radial-Directed:** `10  * strength / (10*sp + d) * direction` (direction = normalize(end - start))
-- **Line-any:** compute closest point `p = start + clamp(dot(node-start, end-start)/dot(end-start,end-start), 0, 1) * (end-start)`, then apply the chosen radial formula with `p` as the center. This gives smooth bullet/laser wakes.
+Effector force formulas (normalized grid space, `sp = grid_spacing.x`). Numerators recalibrated for [0,1] space; denominators unchanged:
+- **Radial-Explosive:** `2.5 * strength * (node - p) / (10000*sp² + d²)` (was 100.0)
+- **Radial-Directed:** `1.0 * strength / (10*sp + d) * direction` (was 10.0; direction = normalize(end - start))
+- **Line-Explosive:** `2.5 * strength * (node - p) / (10000*sp² + d²)` with `p` = closest point on segment (`p = start + clamp(dot(node-start, end-start)/dot(end-start,end-start), 0, 1) * (end-start)`). Gives smooth bullet/laser wakes.
 
 Boundaries (x==0, x==W-1, y==0, y==H-1): position locked to rest, velocity forced to 0 (anchored).
 
