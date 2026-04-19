@@ -35,7 +35,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     vec2  grid_aspect;       // offset 56 — (pixel_w, pixel_h) / min(pixel_w, pixel_h)
 } p;
 
-layout(set = 0, binding = 5, rg32f) uniform restrict writeonly image2D positions_tex;
+layout(set = 0, binding = 5, rgba32f) uniform restrict writeonly image2D positions_tex;
 
 uint idx(uvec2 c) { return c.y * p.grid_size.x + c.x; }
 
@@ -162,5 +162,5 @@ void main() {
     result.velocity = new_vel;
     r_out.data[i]   = result;
 
-    imageStore(positions_tex, ivec2(c), vec4(new_pos, 0.0, 0.0));
+    imageStore(positions_tex, ivec2(c), vec4(new_pos, new_vel));
 }

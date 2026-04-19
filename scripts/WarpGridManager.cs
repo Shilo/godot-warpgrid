@@ -122,7 +122,7 @@ public partial class WarpGridManager : Node2D
         {
             Width       = (uint)GridW,
             Height      = (uint)GridH,
-            Format      = RenderingDevice.DataFormat.R32G32Sfloat,
+            Format      = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
             UsageBits   = RenderingDevice.TextureUsageBits.StorageBit
                         | RenderingDevice.TextureUsageBits.SamplingBit
                         | RenderingDevice.TextureUsageBits.CanCopyFromBit,
