@@ -49,6 +49,14 @@ public partial class WarpGridManager : Node2D
     {
         if (_rd != null) return; // Idempotency: guard against double-_Ready on reparenting / tool-mode
         System.Diagnostics.Debug.Assert(Marshal.SizeOf<WarpEffectorData>() == 32);
+
+        if (GridW < 2 || GridH < 2)
+            throw new Exception($"WarpGridManager: GridW/GridH must be >= 2 (got {GridW}x{GridH}).");
+        if (GridW != GridH || Mathf.Abs(GridSizePixels.X - GridSizePixels.Y) > 0.001f)
+            GD.PushWarning($"WarpGridManager: non-square grid ({GridW}x{GridH} @ {GridSizePixels}) " +
+                           "will produce anisotropic effector radius + spring rest_len. " +
+                           "Use square grid until Phase 4 adds per-axis normalization.");
+
         BuildMesh();
         InitGpu();
         BuildMaterial();
