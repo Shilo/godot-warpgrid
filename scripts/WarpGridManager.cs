@@ -29,7 +29,7 @@ public partial class WarpGridManager : Node2D
     const int   MaxEffectors  = 128;
 
     const int StateStride = 16;
-    const int RestStride  = 8;
+    const int RestStride  = 16; // v5: vec2 anchor + float weight + float _pad (std430 stride)
     const int EffStride   = 32;
     const int ParamSize   = 64;
     const int LocalSize   = 8; // Must match layout(local_size_x/y = 8) in WarpGrid.glsl
@@ -106,6 +106,8 @@ public partial class WarpGridManager : Node2D
                     sBw.Write(nx); sBw.Write(ny);
                     sBw.Write(0.0f); sBw.Write(0.0f);
                     rBw.Write(nx); rBw.Write(ny);
+                    rBw.Write(RestAnchorWeight(x, y));        // per-cell weight
+                    rBw.Write(0.0f);                          // std430 trailing pad
                 }
         }
 
@@ -265,6 +267,14 @@ public partial class WarpGridManager : Node2D
         _rd.ComputeListAddBarrier(list);
         _rd.ComputeListEnd();
     }
+
+    /// <summary>
+    /// Per-cell anchor weight (multiplies <c>RestStiffness</c> and <c>RestDamping</c>).
+    /// Default 1.0 everywhere. Override for softness maps — e.g., 2.0 near edges, 0.5 in
+    /// the interior — to get non-uniform "stiffness fields". Only read once at init;
+    /// changing the map at runtime requires <c>Rebuild()</c>.
+    /// </summary>
+    protected virtual float RestAnchorWeight(int x, int y) => 1.0f;
 
     public override void _ExitTree()
     {

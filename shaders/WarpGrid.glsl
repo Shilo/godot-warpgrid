@@ -4,7 +4,7 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 struct NodeState       { vec2 position; vec2 velocity; };
-struct RestState       { vec2 anchor; };
+struct RestState       { vec2 anchor; float weight; float _pad; };
 struct WarpEffectorData {
     vec2  start_point;
     vec2  end_point;
@@ -98,8 +98,10 @@ void main() {
     if (c.x >= p.grid_size.x || c.y >= p.grid_size.y) return;
 
     uint i = idx(c);
-    NodeState me   = r_in.data[i];
-    vec2      rest = r_rest.data[i].anchor;
+    NodeState me      = r_in.data[i];
+    RestState rs      = r_rest.data[i];
+    vec2      rest    = rs.anchor;
+    float     rest_w  = rs.weight;
 
     if (c.x == 0u || c.y == 0u || c.x == p.grid_size.x - 1u || c.y == p.grid_size.y - 1u) {
         NodeState anchor;
@@ -135,7 +137,7 @@ void main() {
                               rest_len_y, p.stiffness, p.damping);
     }
 
-    force += (rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping;
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
 
     vec2 impulse_v = vec2(0.0);
     for (uint e = 0u; e < p.effector_count; e++) {
