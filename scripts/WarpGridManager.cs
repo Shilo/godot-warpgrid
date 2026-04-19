@@ -72,8 +72,9 @@ public partial class WarpGridManager : Node2D
     // Forces accumulate into velocity (not displacement), giving nodes real inertia and the
     // "slide-into-place" feel of Geometry Wars. RestState.weight=1.0 per-node = unit mass.
     // Phase 8: non-const — auto-tuner mutates these live based on readback metrics.
-    float Stiffness     = 0.5f;    // Phase 8 stress-test seed — tuner walks down from here
-    float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
+    // Phase 8.4 Task 5 — diagnostic reset seeds: under-damped start (d << 2√k).
+    float Stiffness     = 0.3f;    // Phase 8.4 Task 5 diagnostic seed
+    float Damping       = 0.1f;    // Phase 8.4 Task 5 — well below critical 2√0.3 ≈ 1.10
     float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
     float RestDamping   = 0.06f;   // kills high-freq jitter
     float VelDamp       = 0.98f;   // global momentum preservation
@@ -115,9 +116,9 @@ public partial class WarpGridManager : Node2D
     //     (2) maxVel          — peak per-node velocity magnitude (instability detector)
     //     (3) Shatter count   — informational: nodes displaced > 50% of grid_spacing from rest
     [Export] public bool  TuningMode          = true;     // Phase 8 Task 4: start ON
-    [Export] public float ResonanceThreshold  = 0.01f;    // Phase 8.2 Task 4: precision — catch shiver early
+    [Export] public float ResonanceThreshold  = 0.005f;   // Phase 8.4 Task 5: hyper-sensitive
     [Export] public float TunePulseRadius     = 150.0f;
-    [Export] public float TuneImpulseStrength = 100.0f;   // Phase 8.2 Task 3: physical seed, not nuclear
+    [Export] public float TuneImpulseStrength = 50.0f;    // Phase 8.4 Task 5 diagnostic seed
     int   _tuneFrameCount = 0;
     const int TuneCycle   = 60;
     byte[] _readbackBuffer;
@@ -367,20 +368,22 @@ public partial class WarpGridManager : Node2D
         }
         float resonance = resonanceN > 0 ? resonanceSum / resonanceN : 0.0f;
 
-        // Phase 8.2 — asymmetric tuning with structural-vs-impulse characterization.
-        //   (1) shatter && impulse==0  → Stiffness ×0.8 + 2-cycle cooldown (k itself unstable)
-        //   (2) shatter && impulse>0   → Damping +0.05 (energy too hot for current damping)
-        //   (3) maxVel > 10            → Stiffness ×0.5, impulse ×0.5 (runaway safety, always on)
-        //   (4) shatter OR resonance   → Damping +0.02, RestDamping +0.05 (blocked by cooldown)
-        //   (5) 2 cycles of true calm  → Stiffness ×1.05 (hunt for max stable tension)
+        // Phase 8.4 — ratio-aware tuning. Damping is bounded by 2√k (critical) so the solver
+        // can never fall into the over-damped trap where c > 2√k injects numerical jitter.
+        //   (1) shatter && impulse<1 → Stiffness ×0.8 + 2-cycle cooldown (k itself unstable)
+        //   (2) shatter && impulse≥1 → Damping +0.05 (energy too hot for current damping)
+        //   (3) maxVel > 10          → Stiffness ×0.5, Damping ×0.5, impulse ×0.5 (ratio-preserving)
+        //   (4) shatter OR resonance → Damping +0.02, RestDamping +0.05 (blocked by cooldown)
+        //   (5) 2-cycle calm + d<2√k → Stiffness ×1.05, RestDamping -0.01 (hunt hi-tension lo-friction)
+        // Post-adjust: Stiffness floor 0.005, RestDamping floor 0, critical-damping cap on Damping.
         bool shatterTripped   = shatter > 0;
         bool resonanceTripped = resonance > ResonanceThreshold;
         bool maxVelTripped    = maxVel > 10.0f;
-        bool impulseZero      = TuneImpulseStrength == 0.0f;
+        bool impulseNegligible = TuneImpulseStrength < 1.0f; // Phase 8.4 Task 3
         bool anomaly          = shatterTripped || resonanceTripped || maxVelTripped;
 
         // (1) + (2) — structural vs. impulse-driven shatter. Mutually exclusive paths.
-        if (shatterTripped && impulseZero)
+        if (shatterTripped && impulseNegligible)
         {
             Stiffness          *= 0.8f;
             _structuralCooldown = 2;
@@ -390,10 +393,11 @@ public partial class WarpGridManager : Node2D
             Damping += 0.05f;
         }
 
-        // (3) — runaway safety net runs regardless of cooldown.
+        // (3) — runaway safety net. Phase 8.4 Task 1: halve k AND d to preserve stability ratio.
         if (maxVelTripped)
         {
             Stiffness           *= 0.5f;
+            Damping             *= 0.5f;
             TuneImpulseStrength *= 0.5f;
         }
 
@@ -406,14 +410,29 @@ public partial class WarpGridManager : Node2D
 
         if (anomaly) _calmStreak = 0;
 
-        // (5) — calm climb also gated by cooldown so k can settle before being pushed again.
+        // (5) — Phase 8.4 Task 4: calm climb hunts hi-tension/lo-friction. Only bumps k when
+        // damping is still under critical — i.e., there is "headroom" in the ratio regime.
+        // RestDamping creeps DOWN each calm cycle so the mesh trends toward the Geometry Wars ideal.
         if (!anomaly && _structuralCooldown == 0)
         {
             _calmStreak++;
-            if (_calmStreak >= 2) Stiffness *= 1.05f;
+            if (_calmStreak >= 2 && Damping < 2.0f * MathF.Sqrt(Stiffness))
+            {
+                Stiffness   *= 1.05f;
+                RestDamping -= 0.01f;
+            }
         }
 
         if (_structuralCooldown > 0) _structuralCooldown--;
+
+        // Phase 8.4 Task 4 — Stiffness floor: don't collapse into the numerical-noise regime.
+        Stiffness   = MathF.Max(Stiffness, 0.005f);
+        RestDamping = MathF.Max(RestDamping, 0.0f);
+
+        // Phase 8.4 Task 2 — Critical-damping cap. 2√k is the boundary between under/over-damped.
+        // Clamping here AFTER all bumps ensures no path can push Damping into the over-damped trap.
+        float criticalDamping = 2.0f * MathF.Sqrt(Stiffness);
+        Damping = MathF.Min(Damping, criticalDamping);
 
         GD.Print($"[TUNE] shatter={shatter,4} clampRest={clampedAtRest,3} NaN={nanCount,3} " +
                  $"res={resonance:F4} maxVel={maxVel:F3}@({maxVelX,2},{maxVelY,2}) " +
