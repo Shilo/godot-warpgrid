@@ -115,9 +115,9 @@ public partial class WarpGridManager : Node2D
     //     (2) maxVel          — peak per-node velocity magnitude (instability detector)
     //     (3) Shatter count   — informational: nodes displaced > 50% of grid_spacing from rest
     [Export] public bool  TuningMode          = true;     // Phase 8 Task 4: start ON
-    [Export] public float ResonanceThreshold  = 0.02f;    // Phase 8 Task 4: sensitive to shivering
+    [Export] public float ResonanceThreshold  = 0.01f;    // Phase 8.2 Task 4: precision — catch shiver early
     [Export] public float TunePulseRadius     = 150.0f;
-    [Export] public float TuneImpulseStrength = 1000.0f;  // Phase 8 Task 4: forces a response
+    [Export] public float TuneImpulseStrength = 100.0f;   // Phase 8.2 Task 3: physical seed, not nuclear
     int   _tuneFrameCount = 0;
     const int TuneCycle   = 60;
     byte[] _readbackBuffer;
@@ -125,6 +125,10 @@ public partial class WarpGridManager : Node2D
     // maxVel < threshold, the tuner starts pushing Stiffness UP to find the max-stable-tension
     // point. Any sign of instability resets the streak to zero.
     int _calmStreak = 0;
+    // Phase 8.2 Task 2 — structural-instability cooldown. After a shatter-with-no-impulse
+    // fires the "stiffness is the problem" path, blocks damping/K bumps for 2 cycles so the
+    // reduced-k mesh gets a clean settle instead of being masked by additional damping.
+    int _structuralCooldown = 0;
 
     public override void _Ready()
     {
@@ -363,35 +367,57 @@ public partial class WarpGridManager : Node2D
         }
         float resonance = resonanceN > 0 ? resonanceSum / resonanceN : 0.0f;
 
-        // Phase 8 Task 3 — refined adjust rules.
-        //   maxVel > 10 → runaway: halve Stiffness + impulse, reset calm-streak.
-        //   shatter==0 AND maxVel < 0.1 for 2 consecutive cycles → push Stiffness +5% to find
-        //     the Maximum Stable Tension before the mesh starts breaking again.
-        //   Any anomaly in between resets the calm-streak counter.
-        //   Resonance rule runs independently — damping always responds to shivering.
-        if (maxVel > 10.0f)
+        // Phase 8.2 — asymmetric tuning with structural-vs-impulse characterization.
+        //   (1) shatter && impulse==0  → Stiffness ×0.8 + 2-cycle cooldown (k itself unstable)
+        //   (2) shatter && impulse>0   → Damping +0.05 (energy too hot for current damping)
+        //   (3) maxVel > 10            → Stiffness ×0.5, impulse ×0.5 (runaway safety, always on)
+        //   (4) shatter OR resonance   → Damping +0.02, RestDamping +0.05 (blocked by cooldown)
+        //   (5) 2 cycles of true calm  → Stiffness ×1.05 (hunt for max stable tension)
+        bool shatterTripped   = shatter > 0;
+        bool resonanceTripped = resonance > ResonanceThreshold;
+        bool maxVelTripped    = maxVel > 10.0f;
+        bool impulseZero      = TuneImpulseStrength == 0.0f;
+        bool anomaly          = shatterTripped || resonanceTripped || maxVelTripped;
+
+        // (1) + (2) — structural vs. impulse-driven shatter. Mutually exclusive paths.
+        if (shatterTripped && impulseZero)
+        {
+            Stiffness          *= 0.8f;
+            _structuralCooldown = 2;
+        }
+        else if (shatterTripped)
+        {
+            Damping += 0.05f;
+        }
+
+        // (3) — runaway safety net runs regardless of cooldown.
+        if (maxVelTripped)
         {
             Stiffness           *= 0.5f;
             TuneImpulseStrength *= 0.5f;
-            _calmStreak          = 0;
         }
-        else if (shatter == 0 && maxVel < 0.1f)
+
+        // (4) — asymmetric damping bumps on any shatter or resonance, gated by cooldown.
+        if ((resonanceTripped || shatterTripped) && _structuralCooldown == 0)
+        {
+            Damping     += 0.02f;
+            RestDamping += 0.05f;
+        }
+
+        if (anomaly) _calmStreak = 0;
+
+        // (5) — calm climb also gated by cooldown so k can settle before being pushed again.
+        if (!anomaly && _structuralCooldown == 0)
         {
             _calmStreak++;
             if (_calmStreak >= 2) Stiffness *= 1.05f;
         }
-        else
-        {
-            _calmStreak = 0;
-        }
 
-        if (resonance > ResonanceThreshold)
-        {
-            RestDamping += 0.1f;
-        }
+        if (_structuralCooldown > 0) _structuralCooldown--;
 
         GD.Print($"[TUNE] shatter={shatter,4} clampRest={clampedAtRest,3} NaN={nanCount,3} " +
-                 $"res={resonance:F4} maxVel={maxVel:F3}@({maxVelX,2},{maxVelY,2}) calm={_calmStreak} " +
+                 $"res={resonance:F4} maxVel={maxVel:F3}@({maxVelX,2},{maxVelY,2}) " +
+                 $"calm={_calmStreak} cd={_structuralCooldown} " +
                  $"| k={Stiffness:F3} rk={RestStiffness:F3} d={Damping:F3} rd={RestDamping:F3} " +
                  $"vd={VelDamp:F3} imp={TuneImpulseStrength:F3}");
     }
