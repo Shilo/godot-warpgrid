@@ -9,8 +9,8 @@
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
-GridW = 36
-GridH = 20
+GridW = 108
+GridH = 60
 GridSizePixels = Vector2(1152, 648)
 MainTexture = ExtResource("2_koryg")
 

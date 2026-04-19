@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 36;  // Phase 6.3: 64 -> 36 (reverts 6.2). 32 px / cell at 1152 wide.
-    int _gridH = 20;  // Phase 6.3: 36 -> 20 (reverts 6.2). 32 px / cell at 648 tall.
+    int _gridW = 108; // Phase 6.4: 36 -> 108. ~10.67 px / cell at 1152 wide — smooth curves.
+    int _gridH = 60;  // Phase 6.4: 20 -> 60.  10.8  px / cell at 648 tall.
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW
@@ -62,13 +62,13 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6.3 high-elasticity profile — ripples propagate to the edges, overshoot, bounce.
-    // Kernel speed-clamp (±2.5) in WarpGrid.glsl is the safety belt that keeps this stable.
-    const float Stiffness     = 40.0f;   // Phase 6.3: 10 -> 40 — high neighbor pull, ripples reach edges
-    const float Damping       = 0.45f;
-    const float RestStiffness = 1.2f;    // Phase 6.3: 8 -> 1.2 — weak anchor, nodes roam far
-    const float RestDamping   = 0.05f;   // Phase 6.3: 1.2 -> 0.05 — enables overshoot + bounce
-    const float VelDamp       = 0.996f;  // Phase 6.3: 0.92 -> 0.996 — waves keep traveling
+    // Phase 6.4 "elastic viscosity" — dial back the runaway, restore viscous settle, keep bounces.
+    // Speed clamp (±2.5) in WarpGrid.glsl remains the safety belt.
+    const float Stiffness     = 30.0f;   // Phase 6.4: 40 -> 30 — less violence, still strong propagation
+    const float Damping       = 0.45f;   // neighbor damping — absorbs energy as waves travel
+    const float RestStiffness = 5.0f;    // Phase 6.4: 1.2 -> 5.0 — firmer home, prevents shattering
+    const float RestDamping   = 0.8f;    // Phase 6.4: 0.05 -> 0.8 — viscosity settles in 3-4 bounces
+    const float VelDamp       = 0.98f;   // Phase 6.4: 0.996 -> 0.98 — no feedback-loop runaway
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;

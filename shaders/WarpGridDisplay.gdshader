@@ -47,13 +47,15 @@ void fragment() {
 		float edge = min(f.x, 1.0 - f.x);
 		float edge_y = min(f.y, 1.0 - f.y);
 
-		float core_x = 1.0 - smoothstep(0.0, df.x * 3.0, edge);
-		float core_y = 1.0 - smoothstep(0.0, df.y * 3.0, edge_y);
+		// Phase 6.4: sharper core (df*2) + tighter halo (df*6) — at 3x vertex density,
+		// finer lines read as crisp curves; the halo still masks any triangle-edge artifacts.
+		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0, edge);
+		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0, edge_y);
 		float core   = clamp(core_x + core_y, 0.0, 1.0);
 
-		float halo_x = 1.0 - smoothstep(0.0, df.x * 9.0, edge);
-		float halo_y = 1.0 - smoothstep(0.0, df.y * 9.0, edge_y);
-		float halo   = clamp((halo_x + halo_y) * 0.45, 0.0, 1.0);
+		float halo_x = 1.0 - smoothstep(0.0, df.x * 6.0, edge);
+		float halo_y = 1.0 - smoothstep(0.0, df.y * 6.0, edge_y);
+		float halo   = clamp((halo_x + halo_y) * 0.35, 0.0, 1.0);
 
 		float line_mask = max(core, halo);
 

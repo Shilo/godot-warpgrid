@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength = 15.0f;
-    [Export] public float ImpulseStrength = 120.0f; // Phase 6.3: 100 -> 120 — with 0.996 vel_damp + 0.05 rest_damp, 120 ripples across the mesh and bounces off the corners
+    [Export] public float ForceStrength = 12.0f;    // Phase 6.4: 15 -> 12 — paired with stronger 5.0 rest anchor, lower force still produces a clear well
+    [Export] public float ImpulseStrength = 110.0f; // Phase 6.4: 120 -> 110 — elastic-viscosity profile settles in 3-4 bounces at this level
     [Export] public float CursorRadius = 400.0f;    // Bubble wide enough that right-click repulsion + left-click well span several cells
 
     private WarpEffector _effector;
