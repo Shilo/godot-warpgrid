@@ -7,7 +7,7 @@ namespace WarpGrid;
 public partial class WarpMouseController : Node2D
 {
     [Export] public float ForceStrength   = 15.0f;  // Phase 6.5 — steady-state well depth for left/right-click
-    [Export] public float ImpulseStrength = 90.0f;  // Phase 6.5 — shockwave; lower now that two-way springs rebound naturally
+    [Export] public float ImpulseStrength = 150.0f; // Phase 6.6 — massive shockwave; local vel_damp soft-absorbs the impact so 4-5 bounces travel clean
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;

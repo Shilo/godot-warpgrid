@@ -47,10 +47,11 @@ vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
     float len   = length(delta);
     if (len < 1e-7) return vec2(0.0);
     vec2  dir   = delta / len;
-    // Phase 6.5: two-way springs — compression (x < 0) pushes back, tension (x > 0) pulls.
-    // Restoring force is Hooke's law with no pull-only guard; this lets wavefronts rebound
-    // and "bubble" rather than fade at the crest.
+    // Phase 6.6: pull-only springs restored. Compression (x < 0) produces zero force —
+    // prevents runaway feedback where overshooting pairs push each other past the no-return
+    // point. Energy propagation still happens via the tension branch when neighbors stretch.
     float x     = len - rest_len;
+    if (x < 0.0) return vec2(0.0);
     vec2  dv    = other_vel - me_vel;
     float f     = k * x - dot(dv, dir) * c;
     return dir * f;
@@ -121,12 +122,11 @@ void main() {
         return;
     }
 
-    // Phase 6.5 adaptive damping — if this node sits inside any effector's radius,
-    // temporarily slacken rest_damping and vel_damp to 60 % so the response is "liquid"
-    // during interaction. Once the effector moves off or releases, full damping returns
-    // and the mesh settles cleanly.
-    float rest_damp_local = p.rest_damping;
-    float vel_damp_local  = p.vel_damp;
+    // Phase 6.6 local damping — inside any effector's radius, scale vel_damp down to 0.6x.
+    // Lower per-tick velocity multiplier = more energy absorbed = "thicker fluid" at the
+    // impact zone. Distant nodes keep full vel_damp and ripple freely. Rest damping is
+    // left untouched so the anchor pull stays consistent.
+    float vel_damp_local = p.vel_damp;
     for (uint e2 = 0u; e2 < p.effector_count; e2++) {
         WarpEffectorData ed2 = r_eff.data[e2];
         vec2 center2 = (ed2.shape_type == 1u)
@@ -134,8 +134,7 @@ void main() {
             : ed2.start_point;
         vec2 d2v = (me.position - center2) * p.grid_aspect;
         if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
-            rest_damp_local *= 0.6;
-            vel_damp_local  *= 0.6;
+            vel_damp_local *= 0.6;
             break;
         }
     }
@@ -165,7 +164,7 @@ void main() {
                               rest_len_y, p.stiffness, p.damping);
     }
 
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * rest_damp_local) * rest_w;
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
 
     vec2 impulse_v = vec2(0.0);
     for (uint e = 0u; e < p.effector_count; e++) {

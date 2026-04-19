@@ -62,13 +62,14 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6.5 "liquid mesh" — tuned for two-way (compression + tension) springs.
-    // Adaptive damping in WarpGrid.glsl softens these by 0.6× inside any active effector's radius.
-    const float Stiffness     = 15.0f;   // Phase 6.5: 30 -> 15 — two-way springs double effective transfer
-    const float Damping       = 0.45f;   // neighbor damping — absorbs energy as waves ripple
-    const float RestStiffness = 2.5f;    // Phase 6.5: 5.0 -> 2.5 — weaker anchor, global ripple reach
-    const float RestDamping   = 0.4f;    // Phase 6.5: 0.8 -> 0.4 — 3-4 bounces then clean settle
-    const float VelDamp       = 0.985f;  // Phase 6.5: 0.98 -> 0.985 — slight momentum preservation
+    // Phase 6.6 "high tension" — pull-only springs restored, so we can crank stiffness + momentum
+    // without the compression-runaway risk. Local vel_damp softening (×0.6 in effector radius)
+    // absorbs impact spikes while the rest of the mesh ripples freely.
+    const float Stiffness     = 45.0f;   // Phase 6.6: 15 -> 45 — waves travel to the grid edges
+    const float Damping       = 0.45f;   // neighbor damping — absorbs energy along spring axis
+    const float RestStiffness = 0.8f;    // Phase 6.6: 2.5 -> 0.8 — very weak anchor, mesh breathes
+    const float RestDamping   = 0.02f;   // Phase 6.6: 0.4 -> 0.02 — overshoot + elastic bounce
+    const float VelDamp       = 0.99f;   // Phase 6.6: 0.985 -> 0.99 — high global momentum preservation
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
