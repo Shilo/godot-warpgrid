@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 108; // Phase 6.4: 36 -> 108. ~10.67 px / cell at 1152 wide — smooth curves.
-    int _gridH = 60;  // Phase 6.4: 20 -> 60.  10.8  px / cell at 648 tall.
+    int _gridW = 36; // Phase 6.4: 36 -> 108. ~10.67 px / cell at 1152 wide — smooth curves.
+    int _gridH = 20;  // Phase 6.4: 20 -> 60.  10.8  px / cell at 648 tall.
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW

@@ -2,17 +2,12 @@
 
 [ext_resource type="Script" uid="uid://corlwgia51h2m" path="res://scripts/WarpGridManager.cs" id="1_mgr"]
 [ext_resource type="Script" uid="uid://nby2fir7likb" path="res://scripts/WarpEffector.cs" id="2_eff"]
-[ext_resource type="Texture2D" uid="uid://bwtol4il1yp8r" path="res://icon.svg" id="2_koryg"]
 [ext_resource type="Script" uid="uid://bep6cvmq5a4sq" path="res://scripts/WarpMouseController.cs" id="3_mouse"]
 
 [node name="WarpGridRoot" type="Node2D" unique_id=1198507561]
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
-GridW = 108
-GridH = 60
-GridSizePixels = Vector2(1152, 648)
-MainTexture = ExtResource("2_koryg")
 
 [node name="Effector1" type="Node2D" parent="." unique_id=1992371321]
 visible = false
