@@ -42,10 +42,12 @@ Every node receives three kinds of force every tick:
 | `Stiffness` | 10.0 | Crisper ripples, higher wave speed. > ~900 violates CFL (instability). | Mushier, slower ripples. At 0.28 (Phase 3 starting point) it felt "underwater." |
 | `Damping` | 0.45 | Smoother neighbor response; kills high-frequency "crunch." | Crunchier but more energetic; too low = visual noise. |
 | `RestStiffness` | 6.0 | Snaps back to rest faster; less ringing. | Slower snapback; ripples linger. 0 = no rest pull (nodes drift). |
-| `RestDamping` | 0.10 | Per-node velocity drag when near rest; reduces final oscillation. | Longer tail oscillation. |
-| `VelDamp` | 0.92 | Global per-tick velocity multiplier. At 0.92, ~99% decay in 1 s. | `0.98` feels floaty/underwater; `0.85` feels twitchy. |
+| `RestDamping` | 1.2 | Per-node velocity drag near rest; kills residual tail oscillation. Phase 5 raised from 0.10 for snap-and-settle. | Longer tail oscillation; ripples linger. |
+| `VelDamp` | 0.85 | Global per-tick velocity multiplier. At 0.85, ~99.99% decay in 1 s — crisp settle. | `0.92` rings longer; `0.98` feels floaty/underwater. |
 | `RestLenScale` | 0.95 | Rest-spring length as fraction of initial spacing. 0.95 = 5% tension baked in. | 1.0 = slack grid (no baseline tension); < 0.9 = visibly pre-stretched. |
 | `ImpulseCap` | 0.5 | Max one-frame velocity injection from an impulse effector (normalized units). | Lower = safer; higher = risk of CFL overshoot. |
+| `FalloffScale` | 500.0 | Effector near-field sharpness. Falloff `1/(FalloffScale·sp² + d²)`; lower = wider influence per unit Strength. Phase 5 tightened from 1000. | Higher = tighter hot-spot; need ~2× Strength for same visible dent. |
+| `glow_gain` (display shader) | 8.0 | Velocity→brightness multiplier. Phase 5 dropped from 60 after damping tightened; residual speed is lower, so gain must rise relative to motion. | Raise if physics gets looser; lower if highlights blow out. |
 
 ### Effector tuning
 
@@ -73,9 +75,16 @@ Every node receives three kinds of force every tick:
 ## Known limitations
 
 - Single grid instance per scene — multi-grid layering would need separate RD resources per manager.
-- Uniform rest-anchor stiffness across the grid — interior "soft spots" not supported yet.
-- Fixed `Dt = 1/60` — changing `Engine.PhysicsTicksPerSecond` at runtime requires a restart.
+- Fixed `Dt = 1/60` shader constant — accumulator runs the compute at 60 Hz regardless of `Engine.PhysicsTicksPerSecond`, but the shader itself assumes that step size. True variable-`dt` requires UBO plumbing.
 - `MaxEffectors = 128` — hard cap. Exceeding it silently drops tail effectors.
+
+## What changed in Phase 5 / 5.1
+
+- `GridW` / `GridH` now count **cells**, not nodes. `GridW=10` → 10 cells across → 11 vertices per row. See spec §15.
+- Runtime resize: setting `GridW` / `GridH` / `GridSizePixels` from the Inspector or code triggers `Rebuild()` (teardown + re-init). No restart needed.
+- Per-cell rest-anchor weighting via the `protected virtual float RestAnchorWeight(int x, int y)` hook — override on a `WarpGridManager` subclass + call `Rebuild()` to bake a softness map (e.g. 2× near edges, 0.5× in the interior).
+- Effector visibility gate — `WarpEffector` with `Visible == false` contributes zero force (skipped in `UploadEffectors`).
+- Fixed-step accumulator — compute dispatches at a strict 60 Hz regardless of engine physics tick rate; catch-up capped at 8 steps to avoid spiral-of-death.
 
 ## License
 

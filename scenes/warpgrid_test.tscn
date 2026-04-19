@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://corlwgia51h2m" path="res://scripts/WarpGridManager.cs" id="1_mgr"]
 [ext_resource type="Script" uid="uid://nby2fir7likb" path="res://scripts/WarpEffector.cs" id="2_eff"]
+[ext_resource type="Script" uid="uid://bep6cvmq5a4sq" path="res://scripts/WarpMouseController.cs" id="3_mouse"]
 
 [node name="WarpGridRoot" type="Node2D" unique_id=1198507561]
 
@@ -14,3 +15,6 @@ GridSizePixels = Vector2(1152, 648)
 [node name="Effector1" type="Node2D" parent="." unique_id=1992371321]
 position = Vector2(576, 324)
 script = ExtResource("2_eff")
+
+[node name="WarpMouseController" type="Node2D" parent="." unique_id=2310459117]
+script = ExtResource("3_mouse")
