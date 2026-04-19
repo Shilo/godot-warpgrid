@@ -10,7 +10,7 @@ public partial class WarpEffector : Node2D
     [Export] public WarpShapeType Shape = WarpShapeType.Radial;
     [Export] public WarpBehaviorType Behavior = WarpBehaviorType.Force;
     [Export] public float Radius = 300.0f;
-    [Export] public float Strength = 0.01f;
+    [Export] public float Strength = 1.0f;
     [Export] public Vector2 EndOffset = Vector2.Zero;
 
     public override void _Ready()

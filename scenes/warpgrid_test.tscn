@@ -9,7 +9,6 @@
 script = ExtResource("1_mgr")
 
 [node name="Effector1" type="Node2D" parent="WarpGridManager" unique_id=1992371321]
-visible = false
 position = Vector2(500, 500)
 script = ExtResource("2_eff")
 
