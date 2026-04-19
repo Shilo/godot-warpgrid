@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 36; // Phase 6.4: 36 -> 108. ~10.67 px / cell at 1152 wide — smooth curves.
-    int _gridH = 20;  // Phase 6.4: 20 -> 60.  10.8  px / cell at 648 tall.
+    int _gridW = 108; // Phase 6.5: ~10.67 px / cell at 1152 wide — triangle segments short enough to read as curves.
+    int _gridH = 60;  // Phase 6.5: ~10.8  px / cell at 648 tall.
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW
@@ -62,13 +62,13 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6.4 "elastic viscosity" — dial back the runaway, restore viscous settle, keep bounces.
-    // Speed clamp (±2.5) in WarpGrid.glsl remains the safety belt.
-    const float Stiffness     = 30.0f;   // Phase 6.4: 40 -> 30 — less violence, still strong propagation
-    const float Damping       = 0.45f;   // neighbor damping — absorbs energy as waves travel
-    const float RestStiffness = 5.0f;    // Phase 6.4: 1.2 -> 5.0 — firmer home, prevents shattering
-    const float RestDamping   = 0.8f;    // Phase 6.4: 0.05 -> 0.8 — viscosity settles in 3-4 bounces
-    const float VelDamp       = 0.98f;   // Phase 6.4: 0.996 -> 0.98 — no feedback-loop runaway
+    // Phase 6.5 "liquid mesh" — tuned for two-way (compression + tension) springs.
+    // Adaptive damping in WarpGrid.glsl softens these by 0.6× inside any active effector's radius.
+    const float Stiffness     = 15.0f;   // Phase 6.5: 30 -> 15 — two-way springs double effective transfer
+    const float Damping       = 0.45f;   // neighbor damping — absorbs energy as waves ripple
+    const float RestStiffness = 2.5f;    // Phase 6.5: 5.0 -> 2.5 — weaker anchor, global ripple reach
+    const float RestDamping   = 0.4f;    // Phase 6.5: 0.8 -> 0.4 — 3-4 bounces then clean settle
+    const float VelDamp       = 0.985f;  // Phase 6.5: 0.98 -> 0.985 — slight momentum preservation
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;

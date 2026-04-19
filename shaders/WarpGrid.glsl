@@ -41,15 +41,16 @@ uint idx(uvec2 c) { return c.y * p.grid_size.x + c.x; }
 
 vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
                   float rest_len, float k, float c) {
-    // Phase 6.2: guard against rest_len==0 — would imply two nodes sharing the same
-    // anchor, producing degenerate delta=0 jitter under any perturbation.
+    // Phase 6.2 guard: rest_len==0 would imply two nodes sharing an anchor (degenerate).
     if (rest_len < 1e-9) return vec2(0.0);
     vec2  delta = other_pos - me_pos;
     float len   = length(delta);
     if (len < 1e-7) return vec2(0.0);
     vec2  dir   = delta / len;
+    // Phase 6.5: two-way springs — compression (x < 0) pushes back, tension (x > 0) pulls.
+    // Restoring force is Hooke's law with no pull-only guard; this lets wavefronts rebound
+    // and "bubble" rather than fade at the crest.
     float x     = len - rest_len;
-    if (x < 0.0) return vec2(0.0);
     vec2  dv    = other_vel - me_vel;
     float f     = k * x - dot(dv, dir) * c;
     return dir * f;
@@ -120,6 +121,25 @@ void main() {
         return;
     }
 
+    // Phase 6.5 adaptive damping — if this node sits inside any effector's radius,
+    // temporarily slacken rest_damping and vel_damp to 60 % so the response is "liquid"
+    // during interaction. Once the effector moves off or releases, full damping returns
+    // and the mesh settles cleanly.
+    float rest_damp_local = p.rest_damping;
+    float vel_damp_local  = p.vel_damp;
+    for (uint e2 = 0u; e2 < p.effector_count; e2++) {
+        WarpEffectorData ed2 = r_eff.data[e2];
+        vec2 center2 = (ed2.shape_type == 1u)
+            ? closest_on_segment(ed2.start_point, ed2.end_point, me.position)
+            : ed2.start_point;
+        vec2 d2v = (me.position - center2) * p.grid_aspect;
+        if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
+            rest_damp_local *= 0.6;
+            vel_damp_local  *= 0.6;
+            break;
+        }
+    }
+
     vec2 force = vec2(0.0);
     float rest_len_x = p.grid_spacing.x * p.rest_length_scale;
     float rest_len_y = p.grid_spacing.y * p.rest_length_scale;
@@ -145,7 +165,7 @@ void main() {
                               rest_len_y, p.stiffness, p.damping);
     }
 
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * rest_damp_local) * rest_w;
 
     vec2 impulse_v = vec2(0.0);
     for (uint e = 0u; e < p.effector_count; e++) {
@@ -163,12 +183,11 @@ void main() {
     }
 
     vec2 new_vel = me.velocity + force * p.dt + impulse_v;
-    new_vel *= p.vel_damp;
-    // Phase 6.3 safety speed limit — ±2.5 (up from ±2.0). This is the safety belt that lets
-    // the high-elasticity profile (stiffness=40, vel_damp=0.996) stay numerically stable.
-    // Single-frame hitch can't teleport vertices and tear the mesh.
+    new_vel *= vel_damp_local;
+    // Phase 6.3 safety speed limit — ±2.5. Safety belt against single-frame hitch tears.
     new_vel = clamp(new_vel, vec2(-2.5), vec2(2.5));
-    if (length(new_vel) < 1e-4) new_vel = vec2(0.0);
+    // Phase 6.5 jitter guard — tighter threshold (5e-5) so mesh settles to a perfect rest.
+    if (length(new_vel) < 5e-5) new_vel = vec2(0.0);
     vec2 new_pos = me.position + new_vel * p.dt;
 
     NodeState result;

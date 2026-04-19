@@ -47,15 +47,20 @@ void fragment() {
 		float edge = min(f.x, 1.0 - f.x);
 		float edge_y = min(f.y, 1.0 - f.y);
 
-		// Phase 6.4: sharper core (df*2) + tighter halo (df*6) — at 3x vertex density,
-		// finer lines read as crisp curves; the halo still masks any triangle-edge artifacts.
-		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0, edge);
-		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0, edge_y);
+		// Phase 6.5 motion bloom — line thickness grows with local velocity. Fast-moving
+		// segments "fatten" so the straight triangle edges smear into apparent curves.
+		// Scale capped so static mesh stays crisp and peak motion doesn't flood the screen.
+		float motion = 1.0 + clamp(v_speed * 3.5, 0.0, 2.5);
+
+		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0 * motion, edge);
+		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0 * motion, edge_y);
 		float core   = clamp(core_x + core_y, 0.0, 1.0);
 
-		float halo_x = 1.0 - smoothstep(0.0, df.x * 6.0, edge);
-		float halo_y = 1.0 - smoothstep(0.0, df.y * 6.0, edge_y);
-		float halo   = clamp((halo_x + halo_y) * 0.35, 0.0, 1.0);
+		// Wide, dim halo (df*9 @ 0.25 alpha) bleeds across triangle boundaries so the mesh
+		// reads as continuous glow-wire at low-motion rest, not a visible quad tessellation.
+		float halo_x = 1.0 - smoothstep(0.0, df.x * 9.0 * motion, edge);
+		float halo_y = 1.0 - smoothstep(0.0, df.y * 9.0 * motion, edge_y);
+		float halo   = clamp((halo_x + halo_y) * 0.25, 0.0, 1.0);
 
 		float line_mask = max(core, halo);
 
