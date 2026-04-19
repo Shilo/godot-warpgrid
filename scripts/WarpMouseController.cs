@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 250.0f;  // Phase 7 — pixel-unit drive; structural shield caps displacement regardless
-    [Export] public float ImpulseStrength = 1200.0f; // Phase 7 — pixel-unit punch; 240 Hz sub-stepping + shield absorb it cleanly
+    [Export] public float ForceStrength   = 5.0f;    // Phase 7.1 — normalized springs amplify low drive
+    [Export] public float ImpulseStrength = 20.0f;   // Phase 7.1 — pct-stretch math converts small kicks into big ripples
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;

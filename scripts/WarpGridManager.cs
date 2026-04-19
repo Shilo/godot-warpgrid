@@ -68,14 +68,14 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 7 "pixel-space" — forces are pixel-displacements-per-step (no dt scaling in shader).
-    // Constants match VectorGrid Unity source values directly; structural shield (45% cell) in
-    // the kernel makes shatters impossible regardless of impulse magnitude.
-    const float Stiffness     = 0.28f;   // Phase 7: 2.8 -> 0.28 — Unity pixel-unit neighbor spring
+    // Phase 7.1 "normalized-stretch" — spring_force now divides stretch by rest_length, making
+    // the neighbor coefficient a pure percent-stretch multiplier (resolution-independent).
+    // Constants lowered for 240 Hz sub-stepping density; structural shield tightened to 30% cell.
+    const float Stiffness     = 0.12f;   // Phase 7.1: 0.28 -> 0.12 — pct-stretch neighbor spring
     const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
-    const float RestStiffness = 0.04f;   // Phase 7: 0.15 -> 0.04 — Unity pixel-unit anchor pull
-    const float RestDamping   = 0.06f;   // Phase 7: 0.08 -> 0.06 — mirrors Unity anchor damping
-    const float VelDamp       = 0.98f;   // matches Unity m_VelocityDamping
+    const float RestStiffness = 0.01f;   // Phase 7.1: 0.04 -> 0.01 — weak "liquid" home-pull
+    const float RestDamping   = 0.04f;   // Phase 7.1: 0.06 -> 0.04 — standard anchor absorption
+    const float VelDamp       = 0.94f;   // Phase 7.1: 0.98 -> 0.94 — kills shatter-band vibrations
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;

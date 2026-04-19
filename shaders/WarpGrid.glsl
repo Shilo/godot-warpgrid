@@ -47,10 +47,12 @@ vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
     float len   = length(delta);
     if (len < 1e-7) return vec2(0.0);
     vec2  dir   = delta / len;
-    // Phase 6.6: pull-only springs restored. Compression (x < 0) produces zero force —
-    // prevents runaway feedback where overshooting pairs push each other past the no-return
-    // point. Energy propagation still happens via the tension branch when neighbors stretch.
-    float x     = len - rest_len;
+    // Phase 6.6: pull-only springs — compression (x < 0) produces zero force, preventing
+    // runaway feedback where overshooting pairs push each other past the no-return point.
+    // Phase 7.1 normalization: x = (len - rest_len) / rest_len converts the raw pixel stretch
+    // to a PERCENT-STRETCH, so `k` becomes a pure ratio multiplier — identical spring behavior
+    // regardless of physics-grid resolution or pixel cell size.
+    float x     = (len - rest_len) / rest_len;
     if (x < 0.0) return vec2(0.0);
     vec2  dv    = other_vel - me_vel;
     float f     = k * x - dot(dv, dir) * c;
@@ -118,8 +120,9 @@ void main() {
         return;
     }
 
-    // Phase 7 adaptive damping — INSIDE an effector's radius, velocity damping is softened
-    // to 0.6× so struck nodes carry momentum further. Pixel-space, no aspect correction.
+    // Phase 7.1 "liquid safe-zone" — inside an effector's radius, force vel_damp to 0.85
+    // (absolute, not multiplicative). Acts as a shock absorber: thickens the fluid exactly
+    // where the mouse punches, so the initial impulse can never reach shatter velocity.
     float vel_damp_local  = p.vel_damp;
     for (uint e2 = 0u; e2 < p.effector_count; e2++) {
         WarpEffectorData ed2 = r_eff.data[e2];
@@ -128,7 +131,7 @@ void main() {
             : ed2.start_point;
         vec2 d2v = me.position - center2;
         if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
-            vel_damp_local *= 0.6;
+            vel_damp_local = 0.85;
             break;
         }
     }
@@ -168,15 +171,18 @@ void main() {
         force += effector_force(me.position, ed);
     }
 
-    // Phase 7 "Unbreakable" integration — displacement math in pixel space.
-    //   next_v     = velocity-candidate (pixel-displacement-per-step)
-    //   structural shield clamps to ±45% cell so a vertex can never cross its neighbor
-    //   new_vel    is then derived from the actual (clamped) displacement times damping,
-    //              which means runaway velocity dissipates automatically on contact with the cap.
+    // Phase 7.1 Unity-sequenced integration:
+    //   1) velocity += force        (accumulate)
+    //   2) position += velocity     (move — via structural shield so crossover is impossible)
+    //   3) velocity  = displacement (SYNC — if clamp fired, velocity must match actual travel)
+    //   4) velocity *= vel_damp     (damping AFTER the move, per Unity order)
+    // The velocity-sync in step 3 eliminates the "pos/vel desync explosion" that would occur
+    // if we clamped position but left velocity at 100 px for next frame.
     vec2 next_v       = me.velocity + force;
-    vec2 displacement = clamp(next_v, -p.grid_spacing * 0.45, p.grid_spacing * 0.45);
+    vec2 displacement = clamp(next_v, -p.grid_spacing * 0.3, p.grid_spacing * 0.3);
     vec2 new_pos      = me.position + displacement;
-    vec2 new_vel      = (new_pos - me.position) * vel_damp_local;
+    vec2 new_vel      = displacement;
+    new_vel          *= vel_damp_local;
 
     // Jitter guard — 0.01 px in absolute pixels; well below any perceivable motion.
     if (length(new_vel) < 1e-2) new_vel = vec2(0.0);
