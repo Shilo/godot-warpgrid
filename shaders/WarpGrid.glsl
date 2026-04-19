@@ -46,12 +46,12 @@ vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
     float len   = length(delta);
     if (len < 1e-7) return vec2(0.0);
     vec2  dir   = delta / len;
-    // Phase 6.6: pull-only springs — compression (x < 0) produces zero force, preventing
-    // runaway feedback where overshooting pairs push each other past the no-return point.
+    // Phase 12.3 — bidirectional springs restored. Compression (x < 0) now produces outward
+    // force, letting a pushed node "punch" its neighbors into motion. This is what creates
+    // the actual travelling shockwave; the 0.1 structural clamp prevents runaway regardless.
     // Phase 7.2: raw pixel stretch — stiffness is tuned at Unity pixel-scale so `k * px` gives
     // an acceleration in pixels-per-step-squared that integrates cleanly.
     float x     = len - rest_len;
-    if (x < 0.0) return vec2(0.0);
     vec2  dv    = other_vel - me_vel;
     float f     = k * x - dot(dv, dir) * c;
     return dir * f;
@@ -183,20 +183,21 @@ void main() {
     //   5) new_vel      = displacement * vel_damp        (velocity re-sync, then damp after move)
     // This keeps pos/vel coherent AND gives the mesh momentum so it "slides into place"
     // instead of teleporting — the distinction that eliminates shards at high impulse.
+    // Phase 12.3 — Momentum-Persistent integration. Key change: damping is applied to the
+    // INTENT velocity (pre-clamp), and the node remembers that intent even if the physical
+    // move was capped. Excess energy leaks into the mesh over subsequent sub-steps — this
+    // is the mechanism that lets ripples travel through the grid.
+    //   1. Intent velocity — inertia + acceleration, then exponential decay.
+    //   2. Laplacian coordination — neighbor-average blend suppresses checkerboard.
+    //   3. Displacement clamp — ONLY the physical step is bounded (0.1 cell = 3.2 px).
+    //   4. Persistence — new_vel stores the uncapped intent, NOT the limited displacement.
     vec2 acc          = force;
-    vec2 new_vel      = me.velocity + acc;
-    // Phase 9 Task 1 — Laplacian velocity blend. Couples each node's inertia to its 4-neighbor
-    // average, killing the spatial checkerboard mode that dominates pure-parallel mass-spring
-    // steppers. Boundary neighbors contribute zero (they're pinned) which is handled naturally
-    // by the vec2(0.0) initialization — averages toward zero at edges, no special case needed.
-    vec2 avg_v = (v_left + v_right + v_up + v_down) * 0.25;
-    new_vel    = mix(new_vel, avg_v, p.velocity_blend);
-    // Phase 12 Task 1 — Zero-Crossover Clamp. 0.1 × 32 px = 3.2 px per sub-step max.
-    // 3.2 × 4 sub-steps = 12.8 px per engine frame (< 32 px cell, 40% headroom).
-    // VERTEX SWAPPING IS NOW MATHEMATICALLY IMPOSSIBLE.
-    vec2 displacement = clamp(new_vel, -p.grid_spacing * 0.1, p.grid_spacing * 0.1);
+    vec2 next_vel     = (me.velocity + acc) * vel_damp_local;
+    vec2 avg_v        = (v_left + v_right + v_up + v_down) * 0.25;
+    next_vel          = mix(next_vel, avg_v, p.velocity_blend);
+    vec2 displacement = clamp(next_vel, -p.grid_spacing * 0.1, p.grid_spacing * 0.1);
     vec2 new_pos      = me.position + displacement;
-    new_vel           = displacement * vel_damp_local;
+    vec2 new_vel      = next_vel;
 
     // Phase 8 — Inelastic Anchor Tether. Any node past ±1.5 cells from its rest anchor is
     // snapped back AND has its per-axis velocity killed on the clamped axis — an "inelastic
