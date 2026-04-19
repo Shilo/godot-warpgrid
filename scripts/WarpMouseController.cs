@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 0.02f;  // Phase 12 Task 4 — smooth ripples within Zero-Crossover limit
-    [Export] public float ImpulseStrength = 0.1f;   // Phase 12 Task 4
+    [Export] public float ForceStrength   = 2.5f;   // Phase 12.1 — overcomes pixel-space friction + jitter guard
+    [Export] public float ImpulseStrength = 15.0f;  // Phase 12.1 — 100× scale, safe under 0.1 shader clamp
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;

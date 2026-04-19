@@ -72,8 +72,8 @@ public partial class WarpGridManager : Node2D
     // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
     // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
     // and global decay (vd=0.92) — keep neighbor damping minimal.
-    [Export] public float Stiffness     = 0.04f;   // parallel-equivalent of Unity 0.28
-    [Export] public float Damping       = 0.05f;   // Phase 12 Task 3 — LOW, high d causes GPU shatter
+    [Export] public float Stiffness     = 0.08f;   // Phase 12.1 — doubled for snappier return
+    [Export] public float Damping       = 0.1f;    // Phase 12.1 — slight bump, still safely under GPU-shatter threshold
     [Export] public float RestStiffness = 0.05f;   // weak pull = long-lasting ripples
     [Export] public float RestDamping   = 0.65f;   // quiet grid
     [Export] public float VelDamp       = 0.92f;   // Phase 12 Task 3 — aggressive global decay
