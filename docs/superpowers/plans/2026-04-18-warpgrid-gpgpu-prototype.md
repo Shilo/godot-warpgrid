@@ -1,6 +1,36 @@
 # WarpGrid GPGPU Prototype Implementation Plan (v3 — strict zero-readback, MeshHelper)
 
+> **Status (2026-04-18):** Phase 3 complete — Tasks 1–7 shipped. Task 8 (visual tuning) gated on user opening editor + running. See `docs/superpowers/specs/warpgrid-gpgpu-design-spec.md` for the design document.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+## Phase 3 Completion Status
+
+| Task | Status | Commit |
+|------|--------|--------|
+| 1. `WarpEffectorData.cs` | ✅ Done | `390a6d4` |
+| 2. `WarpEffector.cs` | ✅ Done | `02cc13f` |
+| 2b. `MeshHelper.cs` | ✅ Done | `17fd5f3` |
+| 3. `WarpGrid.glsl` | ✅ Done | `c5c5049` |
+| 4. `WarpGridDisplay.gdshader` | ✅ Done | `943844e` |
+| 5. `WarpGridManager.cs` (init) | ✅ Done | `8f7daf8` |
+| 6. `_PhysicsProcess` dispatch | ✅ Done | (merged into `8f7daf8`) |
+| 7. Test scene | ✅ Done | `1d09192` |
+| — Review fixes | ✅ Done | `7c09450`, `defde0a`, `d6f74a0` |
+| 8. Visual tuning | ⏳ User gate | — |
+
+### Post-Implementation Fixes (from code review)
+
+- **`7c09450`** — `WarpGridManager` hardening: `_Ready` idempotency guard, `FreeIfValid` helper for partial-init safety, `LocalSize=8` constant linked to shader, std140/std430 layout comments on upload methods.
+- **`defde0a`** — Test scene polish: stripped placeholder scene UID (editor regenerates), dropped no-op `EndOffset` on radial effector.
+- **`d6f74a0`** — Non-square grid guard: `_Ready` throws if `GridW/H < 2`, `PushWarning` on non-square or unequal `GridSizePixels` (anisotropic radius/rest_len is deferred to Phase 4).
+
+### Intentional Deviations from Spec
+
+- Test scene uses **square 1000×1000 px grid** instead of plan's 1600×900. Reason: `WarpEffector.ToData` normalizes radius by `gridSizePixels.X` only and shader uses `grid_spacing.x` for rest_len — both produce anisotropy on non-square grids. Square grid sidesteps the issue until Phase 4 per-axis fix.
+- `WarpGridManager.GridSizePixels` default changed from `(1600,900)` to `(1000,1000)` to match scene.
+
+---
 
 **Goal:** 100×100 GPU-driven reactive mass-spring grid. Compute kernel writes positions to an RD-backed texture; a `canvas_item` shader on a `MeshInstance2D` samples the texture via `VERTEX_ID`. Zero CPU readback. Supports Radial and Line-segment effectors with Force and Impulse behaviors. Look: tight, elastic "Geometry Wars: Retro Evolved" membrane.
 
@@ -124,7 +154,7 @@ Byte-for-byte match with the GLSL struct.
 **Files:**
 - Create: `scripts/WarpEffectorData.cs`
 
-- [ ] **Step 1: Write the struct**
+- [x] **Step 1: Write the struct**
 
 ```csharp
 using System.Runtime.InteropServices;
@@ -148,7 +178,7 @@ public struct WarpEffectorData
 // sizeof = 32 bytes
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add scripts/WarpEffectorData.cs
@@ -162,7 +192,7 @@ git commit -m "feat: add WarpEffectorData 32-byte GPU struct (radial+line, force
 **Files:**
 - Create: `scripts/WarpEffector.cs`
 
-- [ ] **Step 1: Write the node**
+- [x] **Step 1: Write the node**
 
 ```csharp
 using Godot;
@@ -201,7 +231,7 @@ public partial class WarpEffector : Node2D
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add scripts/WarpEffector.cs
@@ -220,7 +250,7 @@ git commit -m "feat: add WarpEffector Node2D (radial+line, force+impulse)"
 - Vertical segments: for every column `x`, for every `y` in `[0, H-2]`, emit `(y*W + x, (y+1)*W + x)`.
 - Total segments: `H*(W-1) + W*(H-1)` = 100·99 + 100·99 = 19,800 lines = 39,600 indices.
 
-- [ ] **Step 1: Write the helper**
+- [x] **Step 1: Write the helper**
 
 ```csharp
 using Godot;
@@ -273,7 +303,7 @@ public static class MeshHelper
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add scripts/MeshHelper.cs
@@ -287,7 +317,7 @@ git commit -m "feat: MeshHelper — line-grid vertex + index generation"
 **Files:**
 - Create: `shaders/WarpGrid.glsl`
 
-- [ ] **Step 1: Write the shader**
+- [x] **Step 1: Write the shader**
 
 ```glsl
 #[compute]
@@ -456,7 +486,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add shaders/WarpGrid.glsl
@@ -470,7 +500,7 @@ git commit -m "feat: WarpGrid compute shader (radial+line, force+impulse, image 
 **Files:**
 - Create: `shaders/WarpGridDisplay.gdshader`
 
-- [ ] **Step 1: Write the shader**
+- [x] **Step 1: Write the shader**
 
 ```gdshader
 shader_type canvas_item;
@@ -493,7 +523,7 @@ void fragment() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add shaders/WarpGridDisplay.gdshader
@@ -507,7 +537,7 @@ git commit -m "feat: canvas_item shader samples PositionsTex via VERTEX_ID"
 **Files:**
 - Create: `scripts/WarpGridManager.cs`
 
-- [ ] **Step 1: Class skeleton + constants**
+- [x] **Step 1: Class skeleton + constants**
 
 ```csharp
 using System;
@@ -559,7 +589,7 @@ public partial class WarpGridManager : Node2D
 }
 ```
 
-- [ ] **Step 2: `_Ready()` — build mesh + material + GPU**
+- [x] **Step 2: `_Ready()` — build mesh + material + GPU**
 
 ```csharp
 public override void _Ready()
@@ -684,7 +714,7 @@ void BuildMaterial()
 }
 ```
 
-- [ ] **Step 3: `_ExitTree()` cleanup**
+- [x] **Step 3: `_ExitTree()` cleanup**
 
 ```csharp
 public override void _ExitTree()
@@ -701,11 +731,11 @@ public override void _ExitTree()
 }
 ```
 
-- [ ] **Step 4: Verify via Godot MCP**
+- [x] **Step 4: Verify via Godot MCP**
 
 Run `mcp__godot__run_project` headlessly, then `mcp__godot__get_debug_output`. Expected: no errors during `_Ready()`. If `shader_create_from_spirv` fails, verify the GLSL path and that spirv compilation works.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/WarpGridManager.cs
@@ -719,7 +749,7 @@ git commit -m "feat: WarpGridManager scaffold — main RD, SSBOs, image, mesh+ma
 **Files:**
 - Modify: `scripts/WarpGridManager.cs`
 
-- [ ] **Step 1: Add `_PhysicsProcess`**
+- [x] **Step 1: Add `_PhysicsProcess`**
 
 ```csharp
 public override void _PhysicsProcess(double delta)
@@ -731,7 +761,7 @@ public override void _PhysicsProcess(double delta)
 }
 ```
 
-- [ ] **Step 2: `UploadEffectors`**
+- [x] **Step 2: `UploadEffectors`**
 
 ```csharp
 void UploadEffectors()
@@ -761,7 +791,7 @@ void UploadEffectors()
 }
 ```
 
-- [ ] **Step 3: `UploadParams`**
+- [x] **Step 3: `UploadParams`**
 
 ```csharp
 void UploadParams()
@@ -787,7 +817,7 @@ void UploadParams()
 }
 ```
 
-- [ ] **Step 4: `Dispatch` (with explicit barriers)**
+- [x] **Step 4: `Dispatch` (with explicit barriers)**
 
 ```csharp
 void Dispatch()
@@ -807,11 +837,11 @@ void Dispatch()
 }
 ```
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run project; call `mcp__godot__get_debug_output`. Expect: no validation errors from d3d12. Grid should already appear to drift/settle if anything is wrong; correct behavior with no effectors = perfectly still 100×100 grid.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/WarpGridManager.cs
@@ -826,7 +856,7 @@ git commit -m "feat: WarpGridManager dispatch + barriers, no CPU readback"
 - Create: `scenes/warpgrid_test.tscn`
 - Modify: `project.godot` (set main scene)
 
-- [ ] **Step 1: Build scene via Godot MCP**
+- [x] **Step 1: Build scene via Godot MCP**
 
 Use `mcp__godot__create_scene`:
 - Root: `Node2D` `WarpGridRoot`
@@ -835,7 +865,7 @@ Use `mcp__godot__create_scene`:
 - Child of root: `Camera2D`, position `(960,540)`
 - Set Effector1's path inside `WarpGridManager.Effectors`
 
-- [ ] **Step 2: Set main scene**
+- [x] **Step 2: Set main scene**
 
 Update `project.godot`:
 ```
@@ -843,11 +873,11 @@ Update `project.godot`:
 run/main_scene="res://scenes/warpgrid_test.tscn"
 ```
 
-- [ ] **Step 3: Verify scene wiring via MCP**
+- [x] **Step 3: Verify scene wiring via MCP**
 
 Use `mcp__godot__get_project_info` and any scene-dump tool available to confirm `MeshInstance2D` is under `WarpGridManager`, has `Material = WarpGridDisplay.gdshader`, and the `positions_tex` uniform is bound.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scenes/warpgrid_test.tscn project.godot
@@ -903,9 +933,13 @@ git commit -m "tune: WarpGrid physics constants"
 
 ---
 
-## Known Gaps / Future Work
+## Known Gaps / Future Work (Phase 4 roadmap)
 
-- **No GPU→CPU channel at runtime:** debugging is visual + RenderDoc capture. We do not introduce any readback path even for dev builds.
+- **Anisotropic normalization (P1):** `WarpEffector.ToData` divides `Radius` by `gridSizePixels.X` only, and `WarpGrid.glsl` uses `grid_spacing.x` for `rest_len`. Non-square grids become ellipsoid. Runtime guarded via `GD.PushWarning` in `WarpGridManager._Ready`. Fix: use per-axis normalization or `min(x,y)` consistently.
+- **Fixed `Dt = 1/60` (P2):** `_PhysicsProcess` ignores `delta`. Desyncs if `Engine.PhysicsTicksPerSecond` changes. Fix: pass `delta` into UBO.
+- **No GPU→CPU channel at runtime (by design):** debugging is visual + RenderDoc capture. We do not introduce any readback path even for dev builds.
 - **No adaptive substepping:** if effector strengths are pushed higher than spec, add 2 substeps per frame.
 - **Interior anchors:** XNA reference uses a 3×3 loose anchor pattern (k=0.002, c=0.02). Current rest-anchor fills that role uniformly. Add per-cell anchor stiffness if "floaty" — needs a third float per RestState entry (16 bytes/rest).
 - **Single-surface mesh:** if line count explodes, consider instanced rendering or a larger mesh batched on GPU.
+- **No runtime grid resize:** uniform sets embed RIDs. Resizing requires full teardown + re-init. Acceptable for Phase 3 scope.
+- **C# build gate:** first launch requires user to click Build → Build Solution in Godot editor to generate `.csproj`/`.sln`. Headless `--build-solutions` does not trigger generation when no csproj exists.
