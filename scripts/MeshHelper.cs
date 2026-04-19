@@ -15,31 +15,35 @@ public static class MeshHelper
         return verts;
     }
 
-    public static int[] BuildLineGridIndices(int gridW, int gridH)
+    public static Vector2[] BuildGridUVs(int gridW, int gridH)
     {
-        int total  = gridW * gridH;
-        int hLines = gridH * (gridW - 1);
-        int vLines = gridW * (gridH - 1);
-        var indices = new int[(hLines + vLines) * 2];
+        var uvs = new Vector2[gridW * gridH];
+        for (int y = 0; y < gridH; y++)
+            for (int x = 0; x < gridW; x++)
+                uvs[y * gridW + x] = new Vector2(
+                    (float)x / (gridW - 1),
+                    (float)y / (gridH - 1));
+        return uvs;
+    }
+
+    public static int[] BuildQuadGridIndices(int gridW, int gridH)
+    {
+        int cellsX = gridW - 1;
+        int cellsY = gridH - 1;
+        var indices = new int[cellsX * cellsY * 6];
         int k = 0;
-
-        for (int i = 0; i < total; i++)
+        for (int y = 0; y < cellsY; y++)
         {
-            // Skip when i+1 crosses a row boundary (wrap-around prevention).
-            if ((i + 1) % gridW == 0) continue;
-            if (i + 1 >= total) continue;
-            indices[k++] = i;
-            indices[k++] = i + 1;
+            for (int x = 0; x < cellsX; x++)
+            {
+                int tl = y * gridW + x;
+                int tr = tl + 1;
+                int bl = tl + gridW;
+                int br = bl + 1;
+                indices[k++] = tl; indices[k++] = tr; indices[k++] = bl;
+                indices[k++] = tr; indices[k++] = br; indices[k++] = bl;
+            }
         }
-
-        for (int i = 0; i < total; i++)
-        {
-            // Skip when i+gridW leaves the grid (vertical wrap-around prevention).
-            if (i + gridW >= total) continue;
-            indices[k++] = i;
-            indices[k++] = i + gridW;
-        }
-
         return indices;
     }
 }

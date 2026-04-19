@@ -36,6 +36,9 @@ public partial class WarpGridManager : Node2D
     // The manager fetches them each physics tick; no manual wiring via Inspector.
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
 
+    // Phase 6: textured quad-plane — MainTexture samples into fragment via UV. Null = white fallback.
+    [Export] public Texture2D MainTexture;
+
     // Phase 5: GridW / GridH now count CELLS, not nodes. A node-count grid has
     // (cells + 1) vertices per axis. All buffer sizing, mesh generation, shader
     // dispatch extents, and normalization math goes through these two helpers.
@@ -44,15 +47,17 @@ public partial class WarpGridManager : Node2D
 
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    const float Stiffness     = 10.0f;
+    // Phase 6 fluidity calibration — high neighbor stiffness propagates ripples outward,
+    // moderate rest pull gives elastic return, low damping preserves 2-3 bounces + ripple tails.
+    const float Stiffness     = 18.0f;   // Phase 6: was 10.0 — high energy transfer between neighbors
     const float Damping       = 0.45f;
-    const float RestStiffness = 6.0f;
-    const float RestDamping   = 1.2f;   // Phase 5: was 0.4 — stronger viscosity, kills all lingering tail
-    const float VelDamp       = 0.85f;  // Phase 5: was 0.88 — settle to stillness faster
+    const float RestStiffness = 4.5f;    // Phase 6: was 6.0 — softer anchor, more elastic return
+    const float RestDamping   = 0.4f;    // Phase 6: was 1.2 — low damping for 2-3 bounces
+    const float VelDamp       = 0.985f;  // Phase 6: was 0.85 — preserve momentum for long ripples
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
-    const float FalloffScale  = 500.0f; // Phase 5: was 1000.0 — wider effector influence, lower Strength works
+    const float FalloffScale  = 500.0f;  // Legacy — retained in UBO; Gaussian falloff path ignores it.
     const int   MaxEffectors  = 128;
 
     const int StateStride = 16;
@@ -94,15 +99,17 @@ public partial class WarpGridManager : Node2D
         _mesh = new ArrayMesh();
 
         var verts   = MeshHelper.BuildGridVertices(NodesX, NodesY, GridSizePixels);
-        var indices = MeshHelper.BuildLineGridIndices(NodesX, NodesY);
+        var uvs     = MeshHelper.BuildGridUVs(NodesX, NodesY);
+        var indices = MeshHelper.BuildQuadGridIndices(NodesX, NodesY);
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = verts;
+        arrays[(int)Mesh.ArrayType.TexUV]  = uvs;
         arrays[(int)Mesh.ArrayType.Index]  = indices;
-        _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Lines, arrays);
+        _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
 
-        _meshInstance = new MeshInstance2D { Mesh = _mesh };
+        _meshInstance = new MeshInstance2D { Mesh = _mesh, Texture = MainTexture };
         AddChild(_meshInstance);
     }
 
@@ -195,6 +202,8 @@ public partial class WarpGridManager : Node2D
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
         _material.SetShaderParameter("grid_dims",        new Vector2I(NodesX, NodesY));
         _material.SetShaderParameter("line_color",       LineColor);
+        if (MainTexture != null)
+            _material.SetShaderParameter("main_tex",     MainTexture);
         _meshInstance.Material = _material;
     }
 
