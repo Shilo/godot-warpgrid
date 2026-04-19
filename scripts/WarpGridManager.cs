@@ -36,17 +36,23 @@ public partial class WarpGridManager : Node2D
     // The manager fetches them each physics tick; no manual wiring via Inspector.
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
 
+    // Phase 5: GridW / GridH now count CELLS, not nodes. A node-count grid has
+    // (cells + 1) vertices per axis. All buffer sizing, mesh generation, shader
+    // dispatch extents, and normalization math goes through these two helpers.
+    int NodesX => _gridW + 1;
+    int NodesY => _gridH + 1;
+
     // Tuned for normalized [0,1] grid space (not pixel space).
     // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
     const float Stiffness     = 10.0f;
     const float Damping       = 0.45f;
     const float RestStiffness = 6.0f;
-    const float RestDamping   = 0.4f;   // v5: was 0.10 — punchier settle, kills lingering ring
-    const float VelDamp       = 0.88f;  // v4: was 0.92 — thicker "liquid" feel, faster snap to rest
+    const float RestDamping   = 1.2f;   // Phase 5: was 0.4 — stronger viscosity, kills all lingering tail
+    const float VelDamp       = 0.85f;  // Phase 5: was 0.88 — settle to stillness faster
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
-    const float FalloffScale  = 1000.0f; // v4: sharper effector influence (was hardcoded 10000.0 in shader)
+    const float FalloffScale  = 500.0f; // Phase 5: was 1000.0 — wider effector influence, lower Strength works
     const int   MaxEffectors  = 128;
 
     const int StateStride = 16;
@@ -75,8 +81,8 @@ public partial class WarpGridManager : Node2D
         if (_rd != null) return; // Idempotency: guard against double-_Ready on reparenting / tool-mode
         System.Diagnostics.Debug.Assert(Marshal.SizeOf<WarpEffectorData>() == 32);
 
-        if (GridW < 2 || GridH < 2)
-            throw new Exception($"WarpGridManager: GridW/GridH must be >= 2 (got {GridW}x{GridH}).");
+        if (GridW < 1 || GridH < 1)
+            throw new Exception($"WarpGridManager: GridW/GridH must be >= 1 cell (got {GridW}x{GridH}).");
 
         BuildMesh();
         InitGpu();
@@ -87,8 +93,8 @@ public partial class WarpGridManager : Node2D
     {
         _mesh = new ArrayMesh();
 
-        var verts   = MeshHelper.BuildGridVertices(GridW, GridH, GridSizePixels);
-        var indices = MeshHelper.BuildLineGridIndices(GridW, GridH);
+        var verts   = MeshHelper.BuildGridVertices(NodesX, NodesY, GridSizePixels);
+        var indices = MeshHelper.BuildLineGridIndices(NodesX, NodesY);
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
@@ -111,7 +117,7 @@ public partial class WarpGridManager : Node2D
         _shader = _rd.ShaderCreateFromSpirV(spirv);
         _pipeline = _rd.ComputePipelineCreate(_shader);
 
-        int n = GridW * GridH;
+        int n = NodesX * NodesY;
         _stateScratch = new byte[n * StateStride];
         _restScratch  = new byte[n * RestStride];
         using (var sMs = new MemoryStream(_stateScratch))
@@ -119,11 +125,11 @@ public partial class WarpGridManager : Node2D
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
-            for (int y = 0; y < GridH; y++)
-                for (int x = 0; x < GridW; x++)
+            for (int y = 0; y < NodesY; y++)
+                for (int x = 0; x < NodesX; x++)
                 {
-                    float nx = (float)x / (GridW - 1);
-                    float ny = (float)y / (GridH - 1);
+                    float nx = (float)x / GridW; // GridW = cell count; normalized [0,1] across grid
+                    float ny = (float)y / GridH;
                     sBw.Write(nx); sBw.Write(ny);
                     sBw.Write(0.0f); sBw.Write(0.0f);
                     rBw.Write(nx); rBw.Write(ny);
@@ -144,8 +150,8 @@ public partial class WarpGridManager : Node2D
 
         var fmt = new RDTextureFormat
         {
-            Width       = (uint)GridW,
-            Height      = (uint)GridH,
+            Width       = (uint)NodesX,
+            Height      = (uint)NodesY,
             Format      = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
             UsageBits   = RenderingDevice.TextureUsageBits.StorageBit
                         | RenderingDevice.TextureUsageBits.SamplingBit
@@ -187,7 +193,7 @@ public partial class WarpGridManager : Node2D
         _material = new ShaderMaterial { Shader = shader };
         _material.SetShaderParameter("positions_tex",    _positionsTexture);
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
-        _material.SetShaderParameter("grid_dims",        new Vector2I(GridW, GridH));
+        _material.SetShaderParameter("grid_dims",        new Vector2I(NodesX, NodesY));
         _material.SetShaderParameter("line_color",       LineColor);
         _meshInstance.Material = _material;
     }
@@ -255,9 +261,9 @@ public partial class WarpGridManager : Node2D
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
-        bw.Write((uint)GridW); bw.Write((uint)GridH);
-        float sx = 1.0f / (GridW - 1);
-        float sy = 1.0f / (GridH - 1);
+        bw.Write((uint)NodesX); bw.Write((uint)NodesY);
+        float sx = 1.0f / GridW; // GridW = cell count, so NodesX-1 == GridW
+        float sy = 1.0f / GridH;
         bw.Write(sx); bw.Write(sy);
         bw.Write(Dt);
         bw.Write(Stiffness);
@@ -278,8 +284,8 @@ public partial class WarpGridManager : Node2D
     void Dispatch()
     {
         var set = _readIsA ? _uniformSetA : _uniformSetB;
-        uint gx = (uint)((GridW + LocalSize - 1) / LocalSize);
-        uint gy = (uint)((GridH + LocalSize - 1) / LocalSize);
+        uint gx = (uint)((NodesX + LocalSize - 1) / LocalSize);
+        uint gy = (uint)((NodesY + LocalSize - 1) / LocalSize);
 
         long list = _rd.ComputeListBegin();
         _rd.ComputeListBindComputePipeline(list, _pipeline);
