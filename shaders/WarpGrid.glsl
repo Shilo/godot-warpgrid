@@ -20,18 +20,19 @@ layout(set = 0, binding = 2, std430) restrict readonly  buffer RestBuf  { RestSt
 layout(set = 0, binding = 3, std430) restrict readonly  buffer EffBuf   { WarpEffectorData data[]; } r_eff;
 
 layout(set = 0, binding = 4, std140) uniform GridParams {
-    uvec2 grid_size;
-    vec2  grid_spacing;
-    float dt;
-    float stiffness;
-    float damping;
-    float rest_stiffness;
-    float rest_damping;
-    float vel_damp;
-    uint  effector_count;
-    float rest_length_scale;
-    float impulse_cap;
-    float _pad0;
+    uvec2 grid_size;         // offset 0
+    vec2  grid_spacing;      // offset 8
+    float dt;                // offset 16
+    float stiffness;         // offset 20
+    float damping;           // offset 24
+    float rest_stiffness;    // offset 28
+    float rest_damping;      // offset 32
+    float vel_damp;          // offset 36
+    uint  effector_count;    // offset 40
+    float rest_length_scale; // offset 44
+    float impulse_cap;       // offset 48
+    float _pad0;             // offset 52 (std140 padding to align vec2 at 56)
+    vec2  grid_aspect;       // offset 56 — (pixel_w, pixel_h) / min(pixel_w, pixel_h)
 } p;
 
 layout(set = 0, binding = 5, rg32f) uniform restrict writeonly image2D positions_tex;

@@ -25,7 +25,7 @@ public partial class WarpGridManager : Node2D
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
-    const int   MaxEffectors  = 32;
+    const int   MaxEffectors  = 128;
 
     const int StateStride = 16;
     const int RestStride  = 8;
@@ -55,10 +55,6 @@ public partial class WarpGridManager : Node2D
 
         if (GridW < 2 || GridH < 2)
             throw new Exception($"WarpGridManager: GridW/GridH must be >= 2 (got {GridW}x{GridH}).");
-        if (GridW != GridH || Mathf.Abs(GridSizePixels.X - GridSizePixels.Y) > 0.001f)
-            GD.PushWarning($"WarpGridManager: non-square grid ({GridW}x{GridH} @ {GridSizePixels}) " +
-                           "will produce anisotropic effector radius + spring rest_len. " +
-                           "Use square grid until Phase 4 adds per-axis normalization.");
 
         BuildMesh();
         InitGpu();
@@ -218,7 +214,7 @@ public partial class WarpGridManager : Node2D
     void UploadParams()
     {
         // std140 UBO layout — order-critical, must match GridParams block in WarpGrid.glsl.
-        // Block is 64 bytes; 52 bytes written here, remaining 12 left zeroed as padding.
+        // Block is 64 bytes; 60 meaningful bytes written, remaining 4 left zeroed as padding.
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
@@ -235,6 +231,10 @@ public partial class WarpGridManager : Node2D
         bw.Write(_effCount);
         bw.Write(RestLenScale);
         bw.Write(ImpulseCap);
+        bw.Write(0.0f); // _pad0 at offset 52 (std140 alignment for vec2 at 56)
+        float minDim = Mathf.Min(GridSizePixels.X, GridSizePixels.Y);
+        bw.Write(GridSizePixels.X / minDim); // grid_aspect.x at offset 56
+        bw.Write(GridSizePixels.Y / minDim); // grid_aspect.y at offset 60
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
 
