@@ -233,7 +233,7 @@ public partial class WarpGridManager : Node2D
         foreach (Node n in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (count >= MaxEffectors) break;
-            if (n is not WarpEffector eff) continue;
+            if (n is not WarpEffector eff || !eff.Visible) continue; // Phase 5.1: hidden = no warp
 
             // AABB cull: skip effectors whose influence box can't touch the grid.
             var p = eff.GlobalPosition;
