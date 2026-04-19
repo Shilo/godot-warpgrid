@@ -68,17 +68,22 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
     float d2 = dot(d, d);
     if (d2 > e.radius * e.radius) return vec2(0.0);
 
+    // Magnitude multipliers calibrated for normalized [0,1] space.
+    // Original pixel-space values (100.0/10.0) overshoot severely in this range.
     if (e.shape_type == 0u) {
         vec2 dir_vec = e.end_point - e.start_point;
         if (dot(dir_vec, dir_vec) > 1e-10) {
+            // Radial-Directed: was 10.0 * strength / (10*sp + dist)
             float dist = sqrt(d2);
-            return 10.0 * e.strength / (10.0 * p.grid_spacing.x + dist) * normalize(dir_vec);
+            return 1.0 * e.strength / (10.0 * p.grid_spacing.x + dist) * normalize(dir_vec);
         }
+        // Radial-Explosive: was 100.0 * strength * d / (10000*sp² + d²)
         float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
-        return 100.0 * e.strength * d / denom;
+        return 2.5 * e.strength * d / denom;
     }
+    // Line-Explosive: was 100.0 * strength * d / (10000*sp² + d²)
     float denom = 10000.0 * p.grid_spacing.x * p.grid_spacing.x + d2;
-    return 100.0 * e.strength * d / denom;
+    return 2.5 * e.strength * d / denom;
 }
 
 void main() {

@@ -14,11 +14,13 @@ public partial class WarpGridManager : Node2D
     [Export] public Godot.Collections.Array<NodePath> Effectors = new();
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
 
-    const float Stiffness     = 0.28f;
-    const float Damping       = 0.06f;
-    const float RestStiffness = 0.10f;
+    // Tuned for normalized [0,1] grid space (not pixel space).
+    // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
+    const float Stiffness     = 10.0f;  // was 0.28 — too weak in [0,1]
+    const float Damping       = 0.45f;  // was 0.06 — prevents "crunchy" visuals w/ stiffer springs
+    const float RestStiffness = 6.0f;   // was 0.10 — pulls nodes home promptly
     const float RestDamping   = 0.10f;
-    const float VelDamp       = 0.98f;
+    const float VelDamp       = 0.92f;  // was 0.98 — settle faster, less "underwater"
     const float Dt            = 1.0f / 60.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
