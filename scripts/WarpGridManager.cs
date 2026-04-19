@@ -68,13 +68,14 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 6.9 "Unity-scale" — neighbor stiffness rescaled from VectorGrid source (~0.28) with
-    // headroom for 240 Hz sub-stepping; weak anchor lets the mesh breathe without runaway.
-    const float Stiffness     = 2.8f;    // Phase 6.9: 180 -> 2.8 — Unity-source scale × 10 for 240 Hz
+    // Phase 7 "pixel-space" — forces are pixel-displacements-per-step (no dt scaling in shader).
+    // Constants match VectorGrid Unity source values directly; structural shield (45% cell) in
+    // the kernel makes shatters impossible regardless of impulse magnitude.
+    const float Stiffness     = 0.28f;   // Phase 7: 2.8 -> 0.28 — Unity pixel-unit neighbor spring
     const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
-    const float RestStiffness = 0.15f;   // Phase 6.9: 0.4 -> 0.15 — breathing roam
-    const float RestDamping   = 0.08f;   // Phase 6.9: 0.005 -> 0.08 — absorbs pair-wise jitter
-    const float VelDamp       = 0.98f;   // Phase 6.9: 0.998 -> 0.98 — matches Unity m_VelocityDamping
+    const float RestStiffness = 0.04f;   // Phase 7: 0.15 -> 0.04 — Unity pixel-unit anchor pull
+    const float RestDamping   = 0.06f;   // Phase 7: 0.08 -> 0.06 — mirrors Unity anchor damping
+    const float VelDamp       = 0.98f;   // matches Unity m_VelocityDamping
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;
@@ -155,14 +156,16 @@ public partial class WarpGridManager : Node2D
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
+            // Phase 7: positions & anchors stored in ABSOLUTE PIXEL COORDS (0..GridSizePixels).
+            // Shader math is "displacement-per-step" in pixels — no normalization, no dt scaling.
             for (int y = 0; y < PhysNodesY; y++)
                 for (int x = 0; x < PhysNodesX; x++)
                 {
-                    float nx = (float)x / PhysGridW; // PhysGridW = phys cell count; normalized [0,1]
-                    float ny = (float)y / PhysGridH;
-                    sBw.Write(nx); sBw.Write(ny);
+                    float px = (float)x / PhysGridW * GridSizePixels.X;
+                    float py = (float)y / PhysGridH * GridSizePixels.Y;
+                    sBw.Write(px); sBw.Write(py);
                     sBw.Write(0.0f); sBw.Write(0.0f);
-                    rBw.Write(nx); rBw.Write(ny);
+                    rBw.Write(px); rBw.Write(py);
                     rBw.Write(RestAnchorWeight(x, y));        // per-cell weight
                     rBw.Write(0.0f);                          // std430 trailing pad
                 }
@@ -294,8 +297,9 @@ public partial class WarpGridManager : Node2D
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
         bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);
-        float sx = 1.0f / PhysGridW; // Physics grid spacing — NodesX-1 == PhysGridW
-        float sy = 1.0f / PhysGridH;
+        // Phase 7: grid_spacing now in ABSOLUTE PIXELS (cell width/height).
+        float sx = GridSizePixels.X / PhysGridW; // e.g. 32 px at 1152 / 36
+        float sy = GridSizePixels.Y / PhysGridH; // e.g. 32.4 px at 648 / 20
         bw.Write(sx); bw.Write(sy);
         bw.Write(Dt);
         bw.Write(Stiffness);

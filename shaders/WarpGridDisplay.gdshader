@@ -25,7 +25,10 @@ void vertex() {
 	// and last physics node exactly. Everything in between is smooth bilinear interpolation.
 	vec2 sample_uv = (UV * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;
 	vec4 s = texture(positions_tex, sample_uv);
-	vec2 p = s.rg;
+	// Phase 7: physics stores ABSOLUTE PIXEL positions. Normalize then re-apply the pixel
+	// transform — identity pass-through that keeps grid_size_pixels semantically meaningful
+	// and ready for future per-axis scaling.
+	vec2 p = s.rg / grid_size_pixels;
 	vec2 v = s.ba;
 	VERTEX = p * grid_size_pixels;
 	v_speed = length(v);

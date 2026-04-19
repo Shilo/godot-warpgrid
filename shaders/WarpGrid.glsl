@@ -70,14 +70,10 @@ vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
         ? closest_on_segment(e.start_point, e.end_point, node_pos)
         : e.start_point;
 
-    // Aspect-corrected delta: multiply by grid_aspect so a pixel-defined radius
-    // maps to a true circle (not an ellipse) on rectangular grids.
-    // grid_aspect = pixel_size / min(pixel_size), so the short axis stays 1.0
-    // and the long axis scales up. Radius was normalized by min-dim in WarpEffector.ToData,
-    // so comparing |corrected_delta| against e.radius is a consistent metric.
+    // Phase 7: pixel-space — radius, node_pos and center are all in absolute pixels, so
+    // a true circle falls out of a plain euclidean distance test. No aspect correction.
     vec2  d_raw = node_pos - center;
-    vec2  d     = d_raw * p.grid_aspect;
-    float d2    = dot(d, d);
+    float d2    = dot(d_raw, d_raw);
     if (d2 > e.radius * e.radius) return vec2(0.0);
 
     // Phase 6.2: Gaussian hump — magnitude is purely a Gaussian of distance, direction is a unit
@@ -122,24 +118,22 @@ void main() {
         return;
     }
 
-    // Phase 6.9 Unity-style adaptive damping — INSIDE an effector's radius, velocity damping
-    // is softened to 0.6× so struck nodes carry momentum further; anchor damping is unchanged.
-    // Matches VectorGrid's per-impact damping reduction. Once outside, full global damping
-    // applies and ripples settle cleanly.
-    float rest_damp_local = p.rest_damping;
+    // Phase 7 adaptive damping — INSIDE an effector's radius, velocity damping is softened
+    // to 0.6× so struck nodes carry momentum further. Pixel-space, no aspect correction.
     float vel_damp_local  = p.vel_damp;
     for (uint e2 = 0u; e2 < p.effector_count; e2++) {
         WarpEffectorData ed2 = r_eff.data[e2];
         vec2 center2 = (ed2.shape_type == 1u)
             ? closest_on_segment(ed2.start_point, ed2.end_point, me.position)
             : ed2.start_point;
-        vec2 d2v = (me.position - center2) * p.grid_aspect;
+        vec2 d2v = me.position - center2;
         if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
             vel_damp_local *= 0.6;
             break;
         }
     }
 
+    // Phase 7: force accumulator is pixel-displacement-per-step (no dt scaling anywhere).
     vec2 force = vec2(0.0);
     float rest_len_x = p.grid_spacing.x * p.rest_length_scale;
     float rest_len_y = p.grid_spacing.y * p.rest_length_scale;
@@ -165,34 +159,27 @@ void main() {
                               rest_len_y, p.stiffness, p.damping);
     }
 
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * rest_damp_local) * rest_w;
+    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
 
-    vec2 impulse_v = vec2(0.0);
+    // Phase 7: impulse and force branches collapse in displacement math — both add directly
+    // to the per-step force accumulator; structural shield below bounds the result regardless.
     for (uint e = 0u; e < p.effector_count; e++) {
         WarpEffectorData ed = r_eff.data[e];
-        vec2 ef = effector_force(me.position, ed);
-        if (ed.behavior_type == 1u) {
-            float mag = length(ef);
-            if (mag > p.impulse_cap / max(p.dt, 1e-6)) {
-                ef *= (p.impulse_cap / max(p.dt, 1e-6)) / max(mag, 1e-7);
-            }
-            impulse_v += ef * p.dt;
-        } else {
-            force += ef;
-        }
+        force += effector_force(me.position, ed);
     }
 
-    vec2 new_vel = me.velocity + force * p.dt + impulse_v;
-    new_vel *= vel_damp_local;
-    // Phase 6.3 safety speed limit — ±2.5. Safety belt against single-frame hitch tears.
-    new_vel = clamp(new_vel, vec2(-2.5), vec2(2.5));
-    // Phase 6.5 jitter guard — tighter threshold (5e-5) so mesh settles to a perfect rest.
-    if (length(new_vel) < 5e-5) new_vel = vec2(0.0);
-    // Phase 6.9 anti-shatter displacement clamp — a node cannot move more than 40% of its
-    // cell width per tick. Physically prevents vertices from crossing neighbors, which is
-    // the root cause of jagged shards under high-energy impulses.
-    vec2 max_move = p.grid_spacing * 0.4;
-    vec2 new_pos = me.position + clamp(new_vel * p.dt, -max_move, max_move);
+    // Phase 7 "Unbreakable" integration — displacement math in pixel space.
+    //   next_v     = velocity-candidate (pixel-displacement-per-step)
+    //   structural shield clamps to ±45% cell so a vertex can never cross its neighbor
+    //   new_vel    is then derived from the actual (clamped) displacement times damping,
+    //              which means runaway velocity dissipates automatically on contact with the cap.
+    vec2 next_v       = me.velocity + force;
+    vec2 displacement = clamp(next_v, -p.grid_spacing * 0.45, p.grid_spacing * 0.45);
+    vec2 new_pos      = me.position + displacement;
+    vec2 new_vel      = (new_pos - me.position) * vel_damp_local;
+
+    // Jitter guard — 0.01 px in absolute pixels; well below any perceivable motion.
+    if (length(new_vel) < 1e-2) new_vel = vec2(0.0);
 
     NodeState result;
     result.position = new_pos;

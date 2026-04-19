@@ -25,14 +25,15 @@ public partial class WarpEffector : Node2D
 
     public WarpEffectorData ToData(Vector2 gridOrigin, Vector2 gridSizePixels)
     {
-        float minDim = Mathf.Min(gridSizePixels.X, gridSizePixels.Y);
+        // Phase 7: pixel-space physics — positions and radius feed the shader as ABSOLUTE
+        // PIXELS (same frame as node positions). No normalization; no min-dim scaling.
         var startPx = GlobalPosition - gridOrigin;
         var endPx   = startPx + EndOffset;
         return new WarpEffectorData
         {
-            StartPoint   = new Vector2(startPx.X / gridSizePixels.X, startPx.Y / gridSizePixels.Y),
-            EndPoint     = new Vector2(endPx.X   / gridSizePixels.X, endPx.Y   / gridSizePixels.Y),
-            Radius       = Radius / minDim,
+            StartPoint   = startPx,
+            EndPoint     = endPx,
+            Radius       = Radius,
             Strength     = Strength,
             ShapeType    = (uint)Shape,
             BehaviorType = (uint)Behavior,
