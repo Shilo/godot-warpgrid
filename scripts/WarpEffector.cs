@@ -5,27 +5,34 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpEffector : Node2D
 {
-    [Export] public WarpShapeType    Shape    = WarpShapeType.Radial;
+    public const string Group = "warp_effectors";
+
+    [Export] public WarpShapeType Shape = WarpShapeType.Radial;
     [Export] public WarpBehaviorType Behavior = WarpBehaviorType.Force;
-    [Export] public float   Radius   = 200.0f;   // pixels
-    [Export] public float   Strength = 1.0f;
-    // For Line shape: EndOffset is in pixels, relative to GlobalPosition.
-    // For Radial: EndOffset is ignored (StartPoint == EndPoint == GlobalPosition).
-    [Export] public Vector2 EndOffset = Vector2.Right * 100.0f;
-    // For Radial-Directed, you can pack direction in EndOffset as the "end" point;
-    // the shader picks up direction from (end - start) when shape == Radial and |end-start| > 0.
+    [Export] public float Radius = 300.0f;
+    [Export] public float Strength = 0.01f;
+    [Export] public Vector2 EndOffset = Vector2.Zero;
+
+    public override void _Ready()
+    {
+        AddToGroup(Group);
+    }
+
+    public override void _ExitTree()
+    {
+        if (IsInGroup(Group)) RemoveFromGroup(Group);
+    }
 
     public WarpEffectorData ToData(Vector2 gridOrigin, Vector2 gridSizePixels)
     {
-        var startNorm = (GlobalPosition - gridOrigin) / gridSizePixels;
-        var endNorm   = Shape == WarpShapeType.Line
-            ? (GlobalPosition + EndOffset - gridOrigin) / gridSizePixels
-            : startNorm;
+        float minDim = Mathf.Min(gridSizePixels.X, gridSizePixels.Y);
+        var startPx = GlobalPosition - gridOrigin;
+        var endPx   = startPx + EndOffset;
         return new WarpEffectorData
         {
-            StartPoint   = startNorm,
-            EndPoint     = endNorm,
-            Radius       = Radius / gridSizePixels.X,
+            StartPoint   = new Vector2(startPx.X / gridSizePixels.X, startPx.Y / gridSizePixels.Y),
+            EndPoint     = new Vector2(endPx.X   / gridSizePixels.X, endPx.Y   / gridSizePixels.Y),
+            Radius       = Radius / minDim,
             Strength     = Strength,
             ShapeType    = (uint)Shape,
             BehaviorType = (uint)Behavior,
