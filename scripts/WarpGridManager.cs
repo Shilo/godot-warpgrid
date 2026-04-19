@@ -54,23 +54,29 @@ public partial class WarpGridManager : Node2D
         }
     }
 
-    // Phase 5: GridW / GridH now count CELLS, not nodes. A node-count grid has
-    // (cells + 1) vertices per axis. All buffer sizing, mesh generation, shader
-    // dispatch extents, and normalization math goes through these two helpers.
-    int NodesX => _gridW + 1;
-    int NodesY => _gridH + 1;
+    // Phase 6.7: DECOUPLED physics vs visual resolution.
+    //   Physics grid — hard-coded 36×20 cells for stability at sub-stepped 240 Hz.
+    //   Visual mesh  — GridW × GridH cells (Inspector-driven, default 108×60) for smooth curves.
+    //   Display shader samples the low-res physics texture with bilinear filtering,
+    //   so the high-res mesh gets perfectly interpolated displacement.
+    const int PhysGridW = 36;
+    const int PhysGridH = 20;
+    int PhysNodesX => PhysGridW + 1;   // 37
+    int PhysNodesY => PhysGridH + 1;   // 21
 
-    // Tuned for normalized [0,1] grid space (not pixel space).
-    // Distances between neighbors are ~0.01, so k must be large to produce visible restoring force.
-    // Phase 6.6 "high tension" — pull-only springs restored, so we can crank stiffness + momentum
-    // without the compression-runaway risk. Local vel_damp softening (×0.6 in effector radius)
-    // absorbs impact spikes while the rest of the mesh ripples freely.
-    const float Stiffness     = 45.0f;   // Phase 6.6: 15 -> 45 — waves travel to the grid edges
+    // Visual mesh node count — derived from user-facing GridW/GridH cell count.
+    int VisualNodesX => _gridW + 1;
+    int VisualNodesY => _gridH + 1;
+
+    // Phase 6.7 "sub-stepped high tension" — stable at 240 Hz internal rate.
+    const float Stiffness     = 35.0f;   // Phase 6.7: 45 -> 35
     const float Damping       = 0.45f;   // neighbor damping — absorbs energy along spring axis
-    const float RestStiffness = 0.8f;    // Phase 6.6: 2.5 -> 0.8 — very weak anchor, mesh breathes
-    const float RestDamping   = 0.02f;   // Phase 6.6: 0.4 -> 0.02 — overshoot + elastic bounce
+    const float RestStiffness = 1.5f;    // Phase 6.7: 0.8 -> 1.5
+    const float RestDamping   = 0.05f;   // Phase 6.7: 0.02 -> 0.05
     const float VelDamp       = 0.99f;   // Phase 6.6: 0.985 -> 0.99 — high global momentum preservation
-    const float Dt            = 1.0f / 60.0f;
+    // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
+    const int   SubSteps      = 4;
+    const float Dt            = 1.0f / 240.0f;
     const float RestLenScale  = 0.95f;
     const float ImpulseCap    = 0.5f;
     const float FalloffScale  = 500.0f;  // Legacy — retained in UBO; Gaussian falloff path ignores it.
@@ -114,9 +120,9 @@ public partial class WarpGridManager : Node2D
     {
         _mesh = new ArrayMesh();
 
-        var verts   = MeshHelper.BuildGridVertices(NodesX, NodesY, GridSizePixels);
-        var uvs     = MeshHelper.BuildGridUVs(NodesX, NodesY);
-        var indices = MeshHelper.BuildQuadGridIndices(NodesX, NodesY);
+        var verts   = MeshHelper.BuildGridVertices(VisualNodesX, VisualNodesY, GridSizePixels);
+        var uvs     = MeshHelper.BuildGridUVs(VisualNodesX, VisualNodesY);
+        var indices = MeshHelper.BuildQuadGridIndices(VisualNodesX, VisualNodesY);
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
@@ -140,7 +146,7 @@ public partial class WarpGridManager : Node2D
         _shader = _rd.ShaderCreateFromSpirV(spirv);
         _pipeline = _rd.ComputePipelineCreate(_shader);
 
-        int n = NodesX * NodesY;
+        int n = PhysNodesX * PhysNodesY;
         _stateScratch = new byte[n * StateStride];
         _restScratch  = new byte[n * RestStride];
         using (var sMs = new MemoryStream(_stateScratch))
@@ -148,11 +154,11 @@ public partial class WarpGridManager : Node2D
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
-            for (int y = 0; y < NodesY; y++)
-                for (int x = 0; x < NodesX; x++)
+            for (int y = 0; y < PhysNodesY; y++)
+                for (int x = 0; x < PhysNodesX; x++)
                 {
-                    float nx = (float)x / GridW; // GridW = cell count; normalized [0,1] across grid
-                    float ny = (float)y / GridH;
+                    float nx = (float)x / PhysGridW; // PhysGridW = phys cell count; normalized [0,1]
+                    float ny = (float)y / PhysGridH;
                     sBw.Write(nx); sBw.Write(ny);
                     sBw.Write(0.0f); sBw.Write(0.0f);
                     rBw.Write(nx); rBw.Write(ny);
@@ -173,8 +179,8 @@ public partial class WarpGridManager : Node2D
 
         var fmt = new RDTextureFormat
         {
-            Width       = (uint)NodesX,
-            Height      = (uint)NodesY,
+            Width       = (uint)PhysNodesX,
+            Height      = (uint)PhysNodesY,
             Format      = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
             UsageBits   = RenderingDevice.TextureUsageBits.StorageBit
                         | RenderingDevice.TextureUsageBits.SamplingBit
@@ -216,7 +222,12 @@ public partial class WarpGridManager : Node2D
         _material = new ShaderMaterial { Shader = shader };
         _material.SetShaderParameter("positions_tex",    _positionsTexture);
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
-        _material.SetShaderParameter("grid_dims",        new Vector2I(NodesX, NodesY));
+        // Phase 6.7: grid_dims mirrors PHYS cell count — procedural lines in Grid mode
+        // match the "actual" physics grid, not the visual tessellation density.
+        _material.SetShaderParameter("grid_dims",        new Vector2I(PhysGridW, PhysGridH));
+        // phys_tex_size lets the vertex shader bilinear-sample positions_tex with texel-center
+        // offset, so visual-mesh UV=0/1 lands exactly on physics texel(0) / texel(last).
+        _material.SetShaderParameter("phys_tex_size",    new Vector2(PhysNodesX, PhysNodesY));
         _material.SetShaderParameter("line_color",       LineColor);
         _material.SetShaderParameter("display_mode",      (int)_renderMode);
         if (MainTexture != null)
@@ -224,24 +235,18 @@ public partial class WarpGridManager : Node2D
         _meshInstance.Material = _material;
     }
 
-    // v4: explicit fixed-step accumulator. Dispatch runs at exactly 60 Hz regardless of
-    // Engine.PhysicsTicksPerSecond — the shader always sees Dt = 1/60, keeping the simulation
-    // deterministic. Accumulator is clamped to 8 steps to avoid spiral-of-death on long hitches.
-    double _accum;
-    const int MaxCatchupSteps = 8;
-
+    // Phase 6.7: 4 sub-steps per engine _PhysicsProcess, shader sees Dt = 1/240 s.
+    // At engine PhysicsTicksPerSecond=60 this gives 240 Hz internal rate. Effectors + UBO
+    // are uploaded once per engine frame (positions don't change mid-frame) while the compute
+    // kernel is dispatched 4× with ping-pong to let wavefronts propagate 4 cells per visible tick.
     public override void _PhysicsProcess(double delta)
     {
-        _accum += delta;
-        double maxAccum = Dt * MaxCatchupSteps;
-        if (_accum > maxAccum) _accum = maxAccum;
-        while (_accum >= Dt)
+        UploadEffectors();
+        UploadParams();
+        for (int i = 0; i < SubSteps; i++)
         {
-            UploadEffectors();
-            UploadParams();
             Dispatch();
             _readIsA = !_readIsA;
-            _accum -= Dt;
         }
     }
 
@@ -287,9 +292,9 @@ public partial class WarpGridManager : Node2D
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
-        bw.Write((uint)NodesX); bw.Write((uint)NodesY);
-        float sx = 1.0f / GridW; // GridW = cell count, so NodesX-1 == GridW
-        float sy = 1.0f / GridH;
+        bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);
+        float sx = 1.0f / PhysGridW; // Physics grid spacing — NodesX-1 == PhysGridW
+        float sy = 1.0f / PhysGridH;
         bw.Write(sx); bw.Write(sy);
         bw.Write(Dt);
         bw.Write(Stiffness);
@@ -310,8 +315,8 @@ public partial class WarpGridManager : Node2D
     void Dispatch()
     {
         var set = _readIsA ? _uniformSetA : _uniformSetB;
-        uint gx = (uint)((NodesX + LocalSize - 1) / LocalSize);
-        uint gy = (uint)((NodesY + LocalSize - 1) / LocalSize);
+        uint gx = (uint)((PhysNodesX + LocalSize - 1) / LocalSize);
+        uint gy = (uint)((PhysNodesY + LocalSize - 1) / LocalSize);
 
         long list = _rd.ComputeListBegin();
         _rd.ComputeListBindComputePipeline(list, _pipeline);
@@ -338,7 +343,7 @@ public partial class WarpGridManager : Node2D
     /// v5: tear down all RD resources + the mesh child, then re-run BuildMesh + InitGpu
     /// + BuildMaterial from scratch. Called automatically when GridW / GridH / GridSizePixels
     /// change at runtime; can also be called manually after overriding RestAnchorWeight to
-    /// re-bake a new softness map. Clears the accumulator and resets ping-pong state.
+    /// re-bake a new softness map. Resets ping-pong state.
     /// </summary>
     public void Rebuild()
     {
@@ -348,7 +353,6 @@ public partial class WarpGridManager : Node2D
         _material = null;
         _positionsTexture = null;
         _readIsA = true;
-        _accum = 0;
         BuildMesh();
         InitGpu();
         BuildMaterial();

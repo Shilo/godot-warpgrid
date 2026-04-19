@@ -1,10 +1,15 @@
 shader_type canvas_item;
 render_mode unshaded;
 
-uniform sampler2D positions_tex : filter_nearest;
+// Phase 6.7: filter_linear — GPU bilinear-samples the low-res physics texture so the
+// high-res visual mesh reads interpolated displacement, not the raw texel grid.
+uniform sampler2D positions_tex : filter_linear;
 uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid_size_pixels;
 uniform ivec2 grid_dims;
+// Phase 6.7: physics texture dimensions (node count, e.g. 37×21 for a 36×20 phys grid).
+// Used to offset UV sampling to texel centers for exact endpoint alignment.
+uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 uniform vec4 line_color : source_color = vec4(0.15, 0.55, 1.0, 1.0);
 uniform float glow_gain : hint_range(0.0, 200.0) = 8.0;
 
@@ -15,12 +20,13 @@ uniform int display_mode = 0;
 varying float v_speed;
 
 void vertex() {
-	int w = grid_dims.x;
-	int id = int(VERTEX_ID);
-	ivec2 c = ivec2(id - (id / w) * w, id / w);
-	vec4  s = texelFetch(positions_tex, c, 0);
-	vec2  p = s.rg;
-	vec2  v = s.ba;
+	// Phase 6.7: bilinear sample from the low-res physics texture using the visual mesh's UV.
+	// Texel-center offset: UV=0 → (0.5)/N, UV=1 → (N-0.5)/N — aligns endpoints with the first
+	// and last physics node exactly. Everything in between is smooth bilinear interpolation.
+	vec2 sample_uv = (UV * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;
+	vec4 s = texture(positions_tex, sample_uv);
+	vec2 p = s.rg;
+	vec2 v = s.ba;
 	VERTEX = p * grid_size_pixels;
 	v_speed = length(v);
 }
@@ -47,10 +53,10 @@ void fragment() {
 		float edge = min(f.x, 1.0 - f.x);
 		float edge_y = min(f.y, 1.0 - f.y);
 
-		// Phase 6.6 tapered glow — stretched, fast-moving lines appear thinner ("taut")
-		// instead of fatter. The tightening fakes a Catmull-Rom interpolation: the eye
-		// reads the taut thinning as organic curvature, not a straight triangle edge.
-		float taper = 1.0 - glow * 0.45;
+		// Phase 6.7 adaptive tapering — lines thin with local velocity (independent of glow knee).
+		// At rest: taper=1.0 (full line width). At peak motion: taper=0.2 (80% thinner).
+		// Masks the underlying straight triangle edges as the mesh ripples.
+		float taper = 1.0 - clamp(v_speed * 1.5, 0.0, 0.8);
 
 		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0 * taper, edge);
 		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0 * taper, edge_y);
