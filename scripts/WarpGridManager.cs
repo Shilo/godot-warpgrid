@@ -14,8 +14,8 @@ public partial class WarpGridManager : Node2D
     // Field initializers set the backing fields directly — no setter invocation during
     // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
     // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 144; // Phase 6.8: 108 -> 144 (visual). 4 visual vertices per physics cell (36 phys × 4 = 144).
-    int _gridH = 80;  // Phase 6.8: 60 -> 80  (visual). 20 phys × 4 = 80.
+    int _gridW = 180; // Phase 6.9: 144 -> 180 (visual). 5 visual vertices per physics cell (36 phys × 5 = 180).
+    int _gridH = 100; // Phase 6.9: 80 -> 100 (visual). 20 phys × 5 = 100. ~6 px per segment @ 1152×648.
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW
@@ -68,13 +68,13 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 6.8 "high energy 240 Hz" — extreme neighbor stiffness + near-zero damping gives
-    // Geometry-Wars-style snap and propagation. Sub-stepping absorbs the numerical load.
-    const float Stiffness     = 180.0f;  // Phase 6.8: 35 -> 180 — instant cross-mesh propagation
+    // Phase 6.9 "Unity-scale" — neighbor stiffness rescaled from VectorGrid source (~0.28) with
+    // headroom for 240 Hz sub-stepping; weak anchor lets the mesh breathe without runaway.
+    const float Stiffness     = 2.8f;    // Phase 6.9: 180 -> 2.8 — Unity-source scale × 10 for 240 Hz
     const float Damping       = 0.45f;   // neighbor axial damping — absorbs pair-wise oscillation
-    const float RestStiffness = 0.4f;    // Phase 6.8: 1.5 -> 0.4 — very weak anchor, mesh breathes
-    const float RestDamping   = 0.005f;  // Phase 6.8: 0.05 -> 0.005 — massive elastic overshoot
-    const float VelDamp       = 0.998f;  // Phase 6.8: 0.99 -> 0.998 — per-sub-step (0.998^240 ≈ 0.618/s)
+    const float RestStiffness = 0.15f;   // Phase 6.9: 0.4 -> 0.15 — breathing roam
+    const float RestDamping   = 0.08f;   // Phase 6.9: 0.005 -> 0.08 — absorbs pair-wise jitter
+    const float VelDamp       = 0.98f;   // Phase 6.9: 0.998 -> 0.98 — matches Unity m_VelocityDamping
     // Phase 6.7: internal step = 1/240 s. _PhysicsProcess dispatches 4 sub-steps per engine frame.
     const int   SubSteps      = 4;
     const float Dt            = 1.0f / 240.0f;

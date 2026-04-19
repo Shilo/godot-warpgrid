@@ -122,10 +122,10 @@ void main() {
         return;
     }
 
-    // Phase 6.8 "slippery" adaptive damping — INSIDE an effector's radius the node goes
-    // frictionless (vel_damp=1.0) and the anchor pull is slackened (rest_damping ×0.2).
-    // Effect: the mouse "punches" let nodes gain massive momentum locally; once the node
-    // leaves the influence radius, full global damping snaps in and the ripples settle.
+    // Phase 6.9 Unity-style adaptive damping — INSIDE an effector's radius, velocity damping
+    // is softened to 0.6× so struck nodes carry momentum further; anchor damping is unchanged.
+    // Matches VectorGrid's per-impact damping reduction. Once outside, full global damping
+    // applies and ripples settle cleanly.
     float rest_damp_local = p.rest_damping;
     float vel_damp_local  = p.vel_damp;
     for (uint e2 = 0u; e2 < p.effector_count; e2++) {
@@ -135,8 +135,7 @@ void main() {
             : ed2.start_point;
         vec2 d2v = (me.position - center2) * p.grid_aspect;
         if (dot(d2v, d2v) <= ed2.radius * ed2.radius) {
-            rest_damp_local *= 0.2;
-            vel_damp_local   = 1.0;
+            vel_damp_local *= 0.6;
             break;
         }
     }
@@ -189,7 +188,11 @@ void main() {
     new_vel = clamp(new_vel, vec2(-2.5), vec2(2.5));
     // Phase 6.5 jitter guard — tighter threshold (5e-5) so mesh settles to a perfect rest.
     if (length(new_vel) < 5e-5) new_vel = vec2(0.0);
-    vec2 new_pos = me.position + new_vel * p.dt;
+    // Phase 6.9 anti-shatter displacement clamp — a node cannot move more than 40% of its
+    // cell width per tick. Physically prevents vertices from crossing neighbors, which is
+    // the root cause of jagged shards under high-energy impulses.
+    vec2 max_move = p.grid_spacing * 0.4;
+    vec2 new_pos = me.position + clamp(new_vel * p.dt, -max_move, max_move);
 
     NodeState result;
     result.position = new_pos;

@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 40.0f;  // Phase 6.8 — slippery adaptive damping lets nodes accelerate hard under the mouse
-    [Export] public float ImpulseStrength = 250.0f; // Phase 6.8 — massive mouse punch, sub-stepped so no shards
+    [Export] public float ForceStrength   = 15.0f;  // Phase 6.9 — lower drive; balanced Unity-scale stiffness carries ripples
+    [Export] public float ImpulseStrength = 80.0f;  // Phase 6.9 — softer punch; displacement clamp prevents shards
     [Export] public float CursorRadius    = 100.0f; // Repulsion/gravity bubble radius (pixels)
 
     private WarpEffector _effector;
