@@ -85,6 +85,17 @@ vec2 effector_offset(vec2 sample_pos) {
             float damped_inv_sq = (ed.radius * ed.radius) / max(d2 + sigma * sigma, 1e-4);
             offset += inward_dir * (ed.strength * p.force_scaler * damped_inv_sq * 0.18);
             continue;
+        } else if (ed.behavior_type == 4u) {
+            // Shockwave assumes the effector radius is animated over time and treats it as the
+            // live ring radius. This produces an expanding arcade-style wavefront.
+            float ring_radius = max(ed.radius, 1e-4);
+            float thickness = max(max(p.grid_spacing.x, p.grid_spacing.y) * 1.5, ring_radius * 0.12);
+            float ring_delta = abs(len - ring_radius);
+            if (ring_delta > thickness)
+                continue;
+            float ring_falloff = 1.0 - smoothstep(0.0, thickness, ring_delta);
+            offset += radial_dir * (ed.strength * p.force_scaler * ring_falloff * 0.35);
+            continue;
         } else if (ed.shape_type == 0u) {
             vec2 dv = ed.end_point - ed.start_point;
             if (dot(dv, dv) > 1e-10)

@@ -3,6 +3,7 @@ render_mode unshaded;
 
 uniform sampler2D positions_tex : filter_linear;
 uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_disable;
+uniform sampler2D energy_gradient_tex : source_color, filter_linear, repeat_disable;
 uniform vec2 grid_size_pixels;
 uniform ivec2 grid_dims;
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
@@ -49,14 +50,16 @@ void vertex() {
 }
 
 vec4 texture_mode_color(vec2 sample_uv, float glow) {
+	vec4 energy_color = texture(energy_gradient_tex, vec2(clamp(glow, 0.0, 1.0), 0.5));
 	vec4 tex_col = texture(main_tex, clamp(sample_uv, vec2(0.0), vec2(1.0)));
 	vec4 base = tex_col * line_color;
-	vec4 bright = base * 2.0;
+	vec4 bright = tex_col * energy_color;
 	bright.a = base.a;
-	return mix(base, bright, glow);
+	return mix(base, bright, clamp(glow * 1.15, 0.0, 1.0));
 }
 
 vec4 grid_mode_color(vec2 sample_uv, float glow) {
+	vec4 energy_color = texture(energy_gradient_tex, vec2(clamp(glow, 0.0, 1.0), 0.5));
 	vec2 cells = vec2(grid_dims);
 	vec2 f = fract(sample_uv * cells);
 	vec2 df = fwidth(sample_uv * cells);
@@ -77,9 +80,8 @@ vec4 grid_mode_color(vec2 sample_uv, float glow) {
 
 	float line_mask = max(core, halo);
 	vec4 bg = vec4(line_color.rgb * 0.08, 0.85);
-	vec4 bright = line_color * 2.0;
-	bright.a = line_color.a;
-	vec4 lit = mix(line_color, bright, glow);
+	vec4 lit = mix(line_color, energy_color, clamp(glow * 1.25, 0.0, 1.0));
+	lit.rgb = min(lit.rgb * (1.0 + glow * 0.4), vec3(1.0));
 	return mix(bg, lit, line_mask);
 }
 

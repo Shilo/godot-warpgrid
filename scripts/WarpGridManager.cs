@@ -70,6 +70,7 @@ public partial class WarpGridManager : Node2D
     float _persistence = 0.10f;
     float _motionBlurStrength = 0.20f;
     float _stretchTaperStrength = 1.0f;
+    Gradient _energyGradient;
     global::WarpGrid.VibePreset _vibePreset = global::WarpGrid.VibePreset.Arcade;
 
     [ExportGroup("Physics (PBD)")]
@@ -139,6 +140,18 @@ public partial class WarpGridManager : Node2D
             _chromaticStrength = value;
             if (_material != null)
                 _material.SetShaderParameter("chromatic_strength", _chromaticStrength);
+        }
+    }
+
+    [Export] public Gradient EnergyGradient
+    {
+        get => _energyGradient;
+        set
+        {
+            _energyGradient = value;
+            RebuildEnergyGradientTexture();
+            if (_material != null)
+                _material.SetShaderParameter("energy_gradient_tex", _energyGradientTexture);
         }
     }
 
@@ -227,6 +240,7 @@ public partial class WarpGridManager : Node2D
     MeshInstance2D _meshInstance;
     ShaderMaterial _material;
     Texture2Drd _positionsTexture;
+    GradientTexture1D _energyGradientTexture;
 
     byte[] _stateScratch, _restScratch, _effScratch, _paramScratch;
     uint _effCount;
@@ -242,6 +256,7 @@ public partial class WarpGridManager : Node2D
             throw new Exception($"WarpGridManager: GridW/GridH must be >= 1 cell (got {GridW}x{GridH}).");
 
         VerifyGpuManifest();
+        RebuildEnergyGradientTexture();
         RefreshDispatchPlan();
         BuildMesh();
         InitGpu();
@@ -381,6 +396,7 @@ public partial class WarpGridManager : Node2D
         _material.SetShaderParameter("line_color", LineColor);
         _material.SetShaderParameter("display_mode", (int)_renderMode);
         _material.SetShaderParameter("chromatic_strength", _chromaticStrength);
+        _material.SetShaderParameter("energy_gradient_tex", _energyGradientTexture);
         _material.SetShaderParameter("persistence", _persistence);
         _material.SetShaderParameter("motion_blur_strength", _motionBlurStrength);
         _material.SetShaderParameter("stretch_taper_strength", _stretchTaperStrength);
@@ -483,6 +499,25 @@ public partial class WarpGridManager : Node2D
         _rd.ComputeListDispatch(list, gx, gy, 1);
         _rd.ComputeListAddBarrier(list);
         _rd.ComputeListEnd();
+    }
+
+    void RebuildEnergyGradientTexture()
+    {
+        if (_energyGradient == null)
+            _energyGradient = CreateDefaultEnergyGradient();
+
+        _energyGradientTexture ??= new GradientTexture1D();
+        _energyGradientTexture.Width = 256;
+        _energyGradientTexture.Gradient = _energyGradient;
+    }
+
+    Gradient CreateDefaultEnergyGradient()
+    {
+        return new Gradient
+        {
+            Colors = new[] { LineColor, LineColor.Lightened(0.35f), Colors.White },
+            Offsets = new[] { 0.0f, 0.65f, 1.0f }
+        };
     }
 
     void ApplyPreset(global::WarpGrid.VibePreset preset)
