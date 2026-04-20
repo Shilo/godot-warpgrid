@@ -7,10 +7,6 @@
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
-Tension = 0.42
-Damping = 0.96
-EdgeDamp = 0.75
-DirDecay = 0.96
 
 [node name="WarpMouseController" type="Node2D" parent="." unique_id=-1984508179]
 script = ExtResource("3_mouse")
