@@ -94,7 +94,8 @@ vec2 effector_offset(vec2 sample_pos) {
             if (ring_delta > thickness)
                 continue;
             float ring_falloff = 1.0 - smoothstep(0.0, thickness, ring_delta);
-            offset += radial_dir * (ed.strength * p.force_scaler * ring_falloff * 0.35);
+            float decay = 1.0 / max(ring_radius, 1.0);
+            offset += radial_dir * (ed.strength * p.force_scaler * ring_falloff * 0.35 * decay);
             continue;
         } else if (ed.shape_type == 0u) {
             vec2 dv = ed.end_point - ed.start_point;
@@ -167,6 +168,11 @@ vec2 solve_anchor(vec2 position, RestState rs) {
     return mix(position, rs.anchor, stiffness);
 }
 
+float local_damping(RestState rs) {
+    float base_damping = clamp(p.global_damping, 0.0, 1.0);
+    return pow(base_damping, clamp(rs.weight, 0.25, 4.0));
+}
+
 void main() {
     uvec2 c = gl_GlobalInvocationID.xy;
     if (c.x >= p.grid_size.x || c.y >= p.grid_size.y) return;
@@ -179,7 +185,7 @@ void main() {
     NodeState out_state = me;
 
     if (p.phase_kind == PHASE_PREDICTION) {
-        vec2 velocity = (me.current - me.prev) * clamp(p.global_damping, 0.0, 1.0);
+        vec2 velocity = (me.current - me.prev) * local_damping(rs);
         vec2 predicted = me.current + velocity;
         if (p.apply_effectors != 0u)
             predicted += effector_offset(predicted);
@@ -196,7 +202,8 @@ void main() {
         out_state.prev = me.prev;
     } else {
         vec2 finalized = solve_anchor(me.current, rs);
-        vec2 damped_prev = mix(finalized, me.prev, 1.0 - clamp(p.friction, 0.0, 1.0));
+        float local_friction = clamp(p.friction * rs.weight, 0.0, 1.0);
+        vec2 damped_prev = mix(finalized, me.prev, 1.0 - local_friction);
         out_state.current = finalized;
         out_state.prev = damped_prev;
     }

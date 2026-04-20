@@ -70,7 +70,9 @@ public partial class WarpGridManager : Node2D
     float _persistence = 0.10f;
     float _motionBlurStrength = 0.20f;
     float _stretchTaperStrength = 1.0f;
+    float _jitterStrength = 0.05f;
     Gradient _energyGradient;
+    Texture2D _physicsMask;
     global::WarpGrid.VibePreset _vibePreset = global::WarpGrid.VibePreset.Arcade;
 
     [ExportGroup("Physics (PBD)")]
@@ -104,6 +106,12 @@ public partial class WarpGridManager : Node2D
     {
         get => _neighborStiffness;
         set { if (Mathf.IsEqualApprox(_neighborStiffness, value)) return; _neighborStiffness = value; MaybeUploadParams(); }
+    }
+
+    [Export] public Texture2D PhysicsMask
+    {
+        get => _physicsMask;
+        set { if (_physicsMask == value) return; _physicsMask = value; MaybeRebuild(); }
     }
 
     [Export] public float AnchorStiffness
@@ -188,6 +196,18 @@ public partial class WarpGridManager : Node2D
             _stretchTaperStrength = value;
             if (_material != null)
                 _material.SetShaderParameter("stretch_taper_strength", _stretchTaperStrength);
+        }
+    }
+
+    [Export] public float JitterStrength
+    {
+        get => _jitterStrength;
+        set
+        {
+            if (Mathf.IsEqualApprox(_jitterStrength, value)) return;
+            _jitterStrength = value;
+            if (_material != null)
+                _material.SetShaderParameter("jitter_strength", _jitterStrength);
         }
     }
 
@@ -312,6 +332,7 @@ public partial class WarpGridManager : Node2D
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
+            Image physicsMaskImage = _physicsMask?.GetImage();
             for (int y = 0; y < PhysNodesY; y++)
             {
                 for (int x = 0; x < PhysNodesX; x++)
@@ -324,7 +345,7 @@ public partial class WarpGridManager : Node2D
                     sBw.Write(px); sBw.Write(py);
 
                     rBw.Write(px); rBw.Write(py);
-                    rBw.Write(RestAnchorWeight(x, y));
+                    rBw.Write(RestAnchorWeight(x, y) * PhysicsMaskWeight(physicsMaskImage, x, y));
                     rBw.Write(0.0f);
                 }
             }
@@ -400,6 +421,7 @@ public partial class WarpGridManager : Node2D
         _material.SetShaderParameter("persistence", _persistence);
         _material.SetShaderParameter("motion_blur_strength", _motionBlurStrength);
         _material.SetShaderParameter("stretch_taper_strength", _stretchTaperStrength);
+        _material.SetShaderParameter("jitter_strength", _jitterStrength);
         if (MainTexture != null)
             _material.SetShaderParameter("main_tex", MainTexture);
 
@@ -632,6 +654,21 @@ public partial class WarpGridManager : Node2D
         string mismatch = $"WarpGridManager: GPU manifest mismatch for {key}. C#={actualValue}, GLSL={expectedValue}. Refusing to initialize mismatched buffers.";
         GD.PushError(mismatch);
         throw new Exception(mismatch);
+    }
+
+    float PhysicsMaskWeight(Image maskImage, int x, int y)
+    {
+        if (maskImage == null || maskImage.IsEmpty())
+            return 1.0f;
+
+        int maxX = Math.Max(maskImage.GetWidth() - 1, 0);
+        int maxY = Math.Max(maskImage.GetHeight() - 1, 0);
+        int sampleX = Mathf.Clamp(Mathf.RoundToInt((float)x / Math.Max(PhysNodesX - 1, 1) * maxX), 0, maxX);
+        int sampleY = Mathf.Clamp(Mathf.RoundToInt((float)y / Math.Max(PhysNodesY - 1, 1) * maxY), 0, maxY);
+        Color c = maskImage.GetPixel(sampleX, sampleY);
+        float luma = Mathf.Clamp(c.R * 0.299f + c.G * 0.587f + c.B * 0.114f, 0.0f, 1.0f);
+        // Darker pixels create slipperier zones, brighter pixels create stiffer/stickier zones.
+        return Mathf.Lerp(0.4f, 1.6f, luma);
     }
 
     protected virtual float RestAnchorWeight(int x, int y) => 1.0f;

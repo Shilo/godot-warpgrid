@@ -13,6 +13,7 @@ uniform float chromatic_strength : hint_range(0.0, 8.0) = 1.0;
 uniform float persistence : hint_range(0.0, 1.0) = 0.1;
 uniform float motion_blur_strength : hint_range(0.0, 1.0) = 0.2;
 uniform float stretch_taper_strength : hint_range(0.0, 2.0) = 1.0;
+uniform float jitter_strength : hint_range(0.0, 0.5) = 0.05;
 uniform int display_mode = 0;
 
 varying float v_energy;
@@ -22,6 +23,12 @@ const float CHROMATIC_THRESHOLD = 1.2;
 
 vec2 sample_position(vec2 sample_uv) {
 	return texture(positions_tex, clamp(sample_uv, vec2(0.0), vec2(1.0))).xy;
+}
+
+vec2 jitter_noise(vec2 seed) {
+	float n1 = fract(sin(dot(seed, vec2(12.9898, 78.233))) * 43758.5453);
+	float n2 = fract(sin(dot(seed + vec2(31.416, 17.903), vec2(39.3468, 11.135))) * 24634.6345);
+	return vec2(n1, n2) * 2.0 - 1.0;
 }
 
 void vertex() {
@@ -43,7 +50,9 @@ void vertex() {
 		: length(down_pos - current_pos) / max(rest_dy, 1e-4);
 	float speed = length(vel);
 	float blur_mask = clamp(speed / max(max(grid_size_pixels.x, grid_size_pixels.y) * 0.03, 1.0), 0.0, 1.0);
-	VERTEX = current_pos + vel * motion_blur_strength * blur_mask;
+	vec2 jitter = jitter_noise(node_coord + vec2(TIME * 23.0, TIME * 17.0));
+	float jitter_mask = clamp(speed * 0.08, 0.0, 1.0);
+	VERTEX = current_pos + vel * motion_blur_strength * blur_mask + jitter * jitter_strength * jitter_mask;
 	v_energy = speed;
 	v_stretch = max((stretch_x + stretch_y) * 0.5, 1e-4);
 	v_velocity = vel;
