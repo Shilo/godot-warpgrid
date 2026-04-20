@@ -7,7 +7,7 @@ namespace WarpGrid;
 
 public enum WarpRenderMode { Grid = 0, Texture = 1 }
 
-[GlobalClass]
+[GlobalClass, Tool]
 public partial class WarpGridManager : Node2D
 {
     // v5: GridW/GridH/GridSizePixels are properties so runtime changes trigger Rebuild().
@@ -72,10 +72,48 @@ public partial class WarpGridManager : Node2D
     // averaging; inherently stable under parallel GPU update (no force pulls = no checker-
     // board). Tension is wave-speed^2 (CFL: keep tension * 4 < 2). Damping is the global
     // per-step height decay. EdgeDamp thickens energy absorption in the 3-cell fringe.
-    [Export] public float Tension   = 0.35f;   // Laplacian coupling — ripple propagation speed
-    [Export] public float Damping   = 0.996f;  // global height decay per step
-    [Export] public float EdgeDamp  = 0.85f;   // sponge multiplier at the absorbing boundary
-    [Export] public float DirDecay  = 0.995f;  // direction magnitude persistence per step
+    //
+    // Properties (not fields) so Inspector edits in the editor push a fresh UBO on the same
+    // frame — otherwise the kernel would keep running with the stale params buffer.
+    float _tension  = 0.35f;
+    float _damping  = 0.98f;
+    float _edgeDamp = 0.85f;
+    float _dirDecay = 0.995f;
+
+    [Export] public float Tension
+    {
+        get => _tension;
+        set { if (_tension == value) return; _tension = value; MaybeUploadParams(); }
+    }
+    [Export] public float Damping
+    {
+        get => _damping;
+        set { if (_damping == value) return; _damping = value; MaybeUploadParams(); }
+    }
+    [Export] public float EdgeDamp
+    {
+        get => _edgeDamp;
+        set { if (_edgeDamp == value) return; _edgeDamp = value; MaybeUploadParams(); }
+    }
+    [Export] public float DirDecay
+    {
+        get => _dirDecay;
+        set { if (_dirDecay == value) return; _dirDecay = value; MaybeUploadParams(); }
+    }
+
+    // Inspector "button": tick to force a full GPU rebuild (useful in the editor when the
+    // RenderingDevice wasn't ready on scene load). Resets itself immediately so the
+    // checkbox can be clicked repeatedly.
+    [Export] public bool ForceRebuild
+    {
+        get => false;
+        set
+        {
+            if (!value) return;
+            GD.Print("[WarpGrid] ForceRebuild invoked");
+            Rebuild();
+        }
+    }
     // Phase 13 — wave eq propagates 1 cell / iteration, so SubSteps directly scales ripple
     // speed. 2 is enough at 36×20; raise for faster wavefronts.
     const int   SubSteps     = 2;
@@ -95,6 +133,10 @@ public partial class WarpGridManager : Node2D
     Rid _imgPositions;
     Rid _uniformSetA, _uniformSetB;
     bool _readIsA = true;
+    // Set true only after BuildMaterial completes; cleared at the head of TeardownGpu. Gates
+    // _PhysicsProcess so a Rebuild() triggered from the Inspector can't race the kernel
+    // against half-freed resources (symptom: "Parameter 'us' is null", "invalid texture").
+    bool _isInitialized;
 
     ArrayMesh _mesh;
     MeshInstance2D _meshInstance;
@@ -114,11 +156,15 @@ public partial class WarpGridManager : Node2D
 
         BuildMesh();
         InitGpu();
+        // BuildMaterial() is unconditional — even if InitGpu soft-failed, the display shader
+        // still renders the grid at rest (no positions_tex ⇒ h=0 ⇒ VERTEX unchanged). This is
+        // what makes the grid visible in the editor viewport the moment the scene loads.
         BuildMaterial();
     }
 
     void BuildMesh()
     {
+        GD.Print($"[WarpGrid] BuildMesh phys={PhysGridW}x{PhysGridH} visual={VisualNodesX}x{VisualNodesY}");
         _mesh = new ArrayMesh();
 
         var verts   = MeshHelper.BuildGridVertices(VisualNodesX, VisualNodesY, GridSizePixels);
@@ -133,14 +179,27 @@ public partial class WarpGridManager : Node2D
         _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
 
         _meshInstance = new MeshInstance2D { Mesh = _mesh, Texture = MainTexture };
-        AddChild(_meshInstance);
+        // InternalMode.Front keeps this child out of the user's Scene Tree dock so it doesn't
+        // clutter the persistent scene; the editor viewport still renders it.
+        //
+        // Intentionally NOT setting Owner: procedural meshes are rebuilt in _Ready every time
+        // the scene loads, so serializing a 181×101 vertex buffer would bloat the .tscn to
+        // hundreds of KiB for no benefit. Owner=null leaves the node runtime-volatile.
+        AddChild(_meshInstance, false, InternalMode.Front);
     }
 
     void InitGpu()
     {
+        GD.Print("[WarpGrid] InitGpu");
         _rd = RenderingServer.GetRenderingDevice();
         if (_rd == null)
-            throw new Exception("Main RenderingDevice unavailable — use Forward+ or Mobile renderer.");
+        {
+            // Compatibility renderer has no RenderingDevice → compute shaders unavailable.
+            // Soft-fail so the editor still loads the scene; the mesh shows as a flat plane.
+            GD.PushWarning("WarpGridManager: RenderingDevice unavailable (Compatibility renderer?). " +
+                           "Switch the project renderer to Forward+ or Mobile for the wave simulation.");
+            return;
+        }
 
         var shaderFile = GD.Load<RDShaderFile>("res://shaders/WarpGrid.glsl");
         var spirv = shaderFile.GetSpirV();
@@ -220,11 +279,18 @@ public partial class WarpGridManager : Node2D
 
     void BuildMaterial()
     {
-        _positionsTexture = new Texture2Drd { TextureRdRid = _imgPositions };
-
+        GD.Print($"[WarpGrid] BuildMaterial (gpu_ready={_rd != null})");
         var shader = GD.Load<Shader>("res://shaders/WarpGridDisplay.gdshader");
         _material = new ShaderMaterial { Shader = shader };
-        _material.SetShaderParameter("positions_tex",    _positionsTexture);
+
+        // Only bind positions_tex when the compute pipeline actually produced an image RID.
+        // With no texture set, the sampler reads black (h=0, dir=0) and the grid renders at
+        // its anchor grid — exactly what we want for the at-rest preview in the editor.
+        if (_imgPositions.IsValid)
+        {
+            _positionsTexture = new Texture2Drd { TextureRdRid = _imgPositions };
+            _material.SetShaderParameter("positions_tex", _positionsTexture);
+        }
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
         // Phase 6.7: grid_dims mirrors PHYS cell count — procedural lines in Grid mode
         // match the "actual" physics grid, not the visual tessellation density.
@@ -237,6 +303,7 @@ public partial class WarpGridManager : Node2D
         if (MainTexture != null)
             _material.SetShaderParameter("main_tex",     MainTexture);
         _meshInstance.Material = _material;
+        _isInitialized = true;
     }
 
     // Phase 6.7: 4 sub-steps per engine _PhysicsProcess, shader sees Dt = 1/240 s.
@@ -245,6 +312,10 @@ public partial class WarpGridManager : Node2D
     // kernel is dispatched 4× with ping-pong to let wavefronts propagate 4 cells per visible tick.
     public override void _PhysicsProcess(double delta)
     {
+        // Tool scripts tick in-editor too; bail out early if InitGpu() soft-failed or the
+        // scene is still being deserialized (setters can run pre-_Ready). _isInitialized
+        // closes the window between TeardownGpu and BuildMaterial during Rebuild().
+        if (!_isInitialized || _rd == null) return;
         UploadEffectors();
         UploadParams();
         for (int i = 0; i < SubSteps; i++)
@@ -300,10 +371,10 @@ public partial class WarpGridManager : Node2D
         float sx = GridSizePixels.X / PhysGridW;                  // grid_spacing @ 8 (pixels)
         float sy = GridSizePixels.Y / PhysGridH;
         bw.Write(sx); bw.Write(sy);
-        bw.Write(Tension);                                        // tension      @ 16
-        bw.Write(Damping);                                        // damping      @ 20
-        bw.Write(EdgeDamp);                                       // edge_damp    @ 24
-        bw.Write(DirDecay);                                       // dir_decay    @ 28
+        bw.Write(_tension);                                       // tension      @ 16
+        bw.Write(_damping);                                       // damping      @ 20
+        bw.Write(_edgeDamp);                                      // edge_damp    @ 24
+        bw.Write(_dirDecay);                                      // dir_decay    @ 28
         bw.Write(_effCount);                                      // effector_count @ 32
         bw.Write(0.0f);                                           // _pad0        @ 36
         bw.Write(0.0f);                                           // _pad1        @ 40
@@ -345,11 +416,13 @@ public partial class WarpGridManager : Node2D
     /// </summary>
     public void Rebuild()
     {
-        TeardownGpu();
+        // Order matters: drop the visual (material + mesh) BEFORE TeardownGpu, which itself
+        // clears the Texture2Drd → RID bridge centrally so the canvas renderer never samples
+        // a freshly-freed RID ("Texture … is not a valid texture").
         if (_meshInstance != null) { _meshInstance.Free(); _meshInstance = null; }
         _mesh = null;
         _material = null;
-        _positionsTexture = null;
+        TeardownGpu();
         _readIsA = true;
         BuildMesh();
         InitGpu();
@@ -363,9 +436,22 @@ public partial class WarpGridManager : Node2D
         if (_rd != null) Rebuild();
     }
 
+    void MaybeUploadParams()
+    {
+        // Hot-reload physics knobs from the Inspector. No-op when GPU isn't up yet — the
+        // next _Ready or Rebuild will pick up the field values on its first UploadParams.
+        if (_rd != null) UploadParams();
+    }
+
     void TeardownGpu()
     {
+        GD.Print("[WarpGrid] TeardownGpu");
+        _isInitialized = false;
         if (_rd == null) return;
+        // Sever the Texture2Drd → _imgPositions bridge BEFORE freeing the RID, otherwise the
+        // canvas renderer can dereference a dead RID on the next draw and log
+        // "Parameter 'us' is null" / "Texture … is not a valid texture".
+        if (_positionsTexture != null) { _positionsTexture.TextureRdRid = default; _positionsTexture = null; }
         // Crash-safety: guard each RID so partial InitGpu failure (mid-construction) cleans up safely.
         FreeIfValid(_uniformSetA); FreeIfValid(_uniformSetB);
         FreeIfValid(_imgPositions);

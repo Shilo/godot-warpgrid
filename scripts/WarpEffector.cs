@@ -2,7 +2,7 @@ using Godot;
 
 namespace WarpGrid;
 
-[GlobalClass]
+[GlobalClass, Tool]
 public partial class WarpEffector : Node2D
 {
     public const string Group = "warp_effectors";
