@@ -10,12 +10,8 @@ public enum WarpRenderMode { Grid = 0, Texture = 1 }
 [GlobalClass, Tool]
 public partial class WarpGridManager : Node2D
 {
-    // v5: GridW/GridH/GridSizePixels are properties so runtime changes trigger Rebuild().
-    // Field initializers set the backing fields directly — no setter invocation during
-    // C# construction. Godot's scene-load sets these via the setter BEFORE _Ready fires,
-    // so the `_rd != null` guard in MaybeRebuild() keeps that path a no-op.
-    int _gridW = 180; // Phase 6.9: 144 -> 180 (visual). 5 visual vertices per physics cell (36 phys × 5 = 180).
-    int _gridH = 100; // Phase 6.9: 80 -> 100 (visual). 20 phys × 5 = 100. ~6 px per segment @ 1152×648.
+    int _gridW = 180;
+    int _gridH = 100;
     Vector2 _gridSizePixels = new(1152, 648);
 
     [Export] public int GridW
@@ -23,26 +19,22 @@ public partial class WarpGridManager : Node2D
         get => _gridW;
         set { if (_gridW == value) return; _gridW = value; MaybeRebuild(); }
     }
+
     [Export] public int GridH
     {
         get => _gridH;
         set { if (_gridH == value) return; _gridH = value; MaybeRebuild(); }
     }
+
     [Export] public Vector2 GridSizePixels
     {
         get => _gridSizePixels;
         set { if (_gridSizePixels == value) return; _gridSizePixels = value; MaybeRebuild(); }
     }
 
-    // Effectors self-register into the "warp_effectors" group (see WarpEffector.Group).
-    // The manager fetches them each physics tick; no manual wiring via Inspector.
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
-
-    // Phase 6: textured quad-plane — MainTexture samples into fragment via UV. Null = white fallback.
     [Export] public Texture2D MainTexture;
 
-    // Phase 6.1: mutually exclusive display modes. Grid = procedural UV lines; Texture = sampled sprite.
-    // Live-updates the display shader uniform on setter invocation.
     WarpRenderMode _renderMode = WarpRenderMode.Grid;
     [Export] public WarpRenderMode RenderMode
     {
@@ -50,60 +42,82 @@ public partial class WarpGridManager : Node2D
         set
         {
             _renderMode = value;
-            if (_material != null) _material.SetShaderParameter("display_mode", (int)value);
+            if (_material != null)
+                _material.SetShaderParameter("display_mode", (int)value);
         }
     }
 
-    // Phase 6.7: DECOUPLED physics vs visual resolution.
-    //   Physics grid — hard-coded 36×20 cells for stability at sub-stepped 240 Hz.
-    //   Visual mesh  — GridW × GridH cells (Inspector-driven, default 108×60) for smooth curves.
-    //   Display shader samples the low-res physics texture with bilinear filtering,
-    //   so the high-res mesh gets perfectly interpolated displacement.
     const int PhysGridW = 36;
     const int PhysGridH = 20;
-    int PhysNodesX => PhysGridW + 1;   // 37
-    int PhysNodesY => PhysGridH + 1;   // 21
-
-    // Visual mesh node count — derived from user-facing GridW/GridH cell count.
+    int PhysNodesX => PhysGridW + 1;
+    int PhysNodesY => PhysGridH + 1;
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 13 — Discrete 2D Wave Equation. Scalar height field propagated by Laplacian
-    // averaging; inherently stable under parallel GPU update (no force pulls = no checker-
-    // board). Tension is wave-speed^2 (CFL: keep tension * 4 < 2). Damping is the global
-    // per-step height decay. EdgeDamp thickens energy absorption in the 3-cell fringe.
-    //
-    // Properties (not fields) so Inspector edits in the editor push a fresh UBO on the same
-    // frame — otherwise the kernel would keep running with the stale params buffer.
-    float _tension  = 0.35f;
-    float _damping  = 0.98f;
-    float _edgeDamp = 0.85f;
-    float _dirDecay = 0.995f;
+    int _subSteps = 2;
+    int _solverIterations = 3;
+    float _neighborStiffness = 0.5f;
+    float _anchorStiffness = 0.35f;
+    float _globalDamping = 0.98f;
+    float _friction = 0.05f;
+    bool _boundaryPinning = true;
 
-    [Export] public float Tension
+    [Export] public int SubSteps
     {
-        get => _tension;
-        set { if (_tension == value) return; _tension = value; MaybeUploadParams(); }
-    }
-    [Export] public float Damping
-    {
-        get => _damping;
-        set { if (_damping == value) return; _damping = value; MaybeUploadParams(); }
-    }
-    [Export] public float EdgeDamp
-    {
-        get => _edgeDamp;
-        set { if (_edgeDamp == value) return; _edgeDamp = value; MaybeUploadParams(); }
-    }
-    [Export] public float DirDecay
-    {
-        get => _dirDecay;
-        set { if (_dirDecay == value) return; _dirDecay = value; MaybeUploadParams(); }
+        get => _subSteps;
+        set
+        {
+            value = Math.Max(1, value);
+            if (_subSteps == value) return;
+            _subSteps = value;
+            RefreshDispatchPlan();
+            MaybeUploadParams();
+        }
     }
 
-    // Inspector "button": tick to force a full GPU rebuild (useful in the editor when the
-    // RenderingDevice wasn't ready on scene load). Resets itself immediately so the
-    // checkbox can be clicked repeatedly.
+    [Export] public int SolverIterations
+    {
+        get => _solverIterations;
+        set
+        {
+            value = Math.Max(1, value);
+            if (_solverIterations == value) return;
+            _solverIterations = value;
+            RefreshDispatchPlan();
+            MaybeUploadParams();
+        }
+    }
+
+    [Export] public float NeighborStiffness
+    {
+        get => _neighborStiffness;
+        set { if (Mathf.IsEqualApprox(_neighborStiffness, value)) return; _neighborStiffness = value; MaybeUploadParams(); }
+    }
+
+    [Export] public float AnchorStiffness
+    {
+        get => _anchorStiffness;
+        set { if (Mathf.IsEqualApprox(_anchorStiffness, value)) return; _anchorStiffness = value; MaybeUploadParams(); }
+    }
+
+    [Export] public float GlobalDamping
+    {
+        get => _globalDamping;
+        set { if (Mathf.IsEqualApprox(_globalDamping, value)) return; _globalDamping = value; MaybeUploadParams(); }
+    }
+
+    [Export] public float Friction
+    {
+        get => _friction;
+        set { if (Mathf.IsEqualApprox(_friction, value)) return; _friction = value; MaybeUploadParams(); }
+    }
+
+    [Export] public bool BoundaryPinning
+    {
+        get => _boundaryPinning;
+        set { if (_boundaryPinning == value) return; _boundaryPinning = value; MaybeUploadParams(); }
+    }
+
     [Export] public bool ForceRebuild
     {
         get => false;
@@ -114,18 +128,13 @@ public partial class WarpGridManager : Node2D
             Rebuild();
         }
     }
-    // Phase 13 — wave eq propagates 1 cell / iteration, so SubSteps directly scales ripple
-    // speed. 2 is enough at 36×20; raise for faster wavefronts.
-    [Export] public int SubSteps = 2;
-    const int   MaxEffectors = 128;
 
+    const int MaxEffectors = 128;
     const int StateStride = 16;
-    const int RestStride  = 16; // v5: vec2 anchor + float weight + float _pad (std430 stride)
-    const int EffStride   = 32;
-    // Phase 10: UBO shrunk to 48 bytes after dropping dt/impulse_cap/falloff_scale/grid_aspect.
-    // 48 is already 16-byte aligned, no std140 padding needed.
-    const int ParamSize   = 48;
-    const int LocalSize   = 8; // Must match layout(local_size_x/y = 8) in WarpGrid.glsl
+    const int RestStride = 16;
+    const int EffStride = 32;
+    const int ParamSize = 64;
+    const int LocalSize = 8;
 
     RenderingDevice _rd;
     Rid _shader, _pipeline;
@@ -133,9 +142,6 @@ public partial class WarpGridManager : Node2D
     Rid _imgPositions;
     Rid _uniformSetA, _uniformSetB;
     bool _readIsA = true;
-    // Set true only after BuildMaterial completes; cleared at the head of TeardownGpu. Gates
-    // _PhysicsProcess so a Rebuild() triggered from the Inspector can't race the kernel
-    // against half-freed resources (symptom: "Parameter 'us' is null", "invalid texture").
     bool _isInitialized;
 
     ArrayMesh _mesh;
@@ -145,21 +151,26 @@ public partial class WarpGridManager : Node2D
 
     byte[] _stateScratch, _restScratch, _effScratch, _paramScratch;
     uint _effCount;
+    WarpGridDispatchPhase[] _dispatchPhases = Array.Empty<WarpGridDispatchPhase>();
+    WarpGridDispatchPhase _lastDispatchPhase = new(0, 0, WarpGridDispatchPhaseKind.Prediction, true);
 
     public override void _Ready()
     {
-        if (_rd != null) return; // Idempotency: guard against double-_Ready on reparenting / tool-mode
+        if (_rd != null) return;
         System.Diagnostics.Debug.Assert(Marshal.SizeOf<WarpEffectorData>() == 32);
 
         if (GridW < 1 || GridH < 1)
             throw new Exception($"WarpGridManager: GridW/GridH must be >= 1 cell (got {GridW}x{GridH}).");
 
+        RefreshDispatchPlan();
         BuildMesh();
         InitGpu();
-        // BuildMaterial() is unconditional — even if InitGpu soft-failed, the display shader
-        // still renders the grid at rest (no positions_tex ⇒ h=0 ⇒ VERTEX unchanged). This is
-        // what makes the grid visible in the editor viewport the moment the scene loads.
         BuildMaterial();
+    }
+
+    void RefreshDispatchPlan()
+    {
+        _dispatchPhases = WarpGridPbdDispatchPlan.Build(_subSteps, _solverIterations);
     }
 
     void BuildMesh()
@@ -167,24 +178,18 @@ public partial class WarpGridManager : Node2D
         GD.Print($"[WarpGrid] BuildMesh phys={PhysGridW}x{PhysGridH} visual={VisualNodesX}x{VisualNodesY}");
         _mesh = new ArrayMesh();
 
-        var verts   = MeshHelper.BuildGridVertices(VisualNodesX, VisualNodesY, GridSizePixels);
-        var uvs     = MeshHelper.BuildGridUVs(VisualNodesX, VisualNodesY);
+        var verts = MeshHelper.BuildGridVertices(VisualNodesX, VisualNodesY, GridSizePixels);
+        var uvs = MeshHelper.BuildGridUVs(VisualNodesX, VisualNodesY);
         var indices = MeshHelper.BuildQuadGridIndices(VisualNodesX, VisualNodesY);
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = verts;
-        arrays[(int)Mesh.ArrayType.TexUV]  = uvs;
-        arrays[(int)Mesh.ArrayType.Index]  = indices;
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        arrays[(int)Mesh.ArrayType.Index] = indices;
         _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
 
         _meshInstance = new MeshInstance2D { Mesh = _mesh, Texture = MainTexture };
-        // InternalMode.Front keeps this child out of the user's Scene Tree dock so it doesn't
-        // clutter the persistent scene; the editor viewport still renders it.
-        //
-        // Intentionally NOT setting Owner: procedural meshes are rebuilt in _Ready every time
-        // the scene loads, so serializing a 181×101 vertex buffer would bloat the .tscn to
-        // hundreds of KiB for no benefit. Owner=null leaves the node runtime-volatile.
         AddChild(_meshInstance, false, InternalMode.Front);
     }
 
@@ -194,10 +199,7 @@ public partial class WarpGridManager : Node2D
         _rd = RenderingServer.GetRenderingDevice();
         if (_rd == null)
         {
-            // Compatibility renderer has no RenderingDevice → compute shaders unavailable.
-            // Soft-fail so the editor still loads the scene; the mesh shows as a flat plane.
-            GD.PushWarning("WarpGridManager: RenderingDevice unavailable (Compatibility renderer?). " +
-                           "Switch the project renderer to Forward+ or Mobile for the wave simulation.");
+            GD.PushWarning("WarpGridManager: RenderingDevice unavailable (Compatibility renderer?). Switch the project renderer to Forward+ or Mobile for the PBD simulation.");
             return;
         }
 
@@ -208,46 +210,49 @@ public partial class WarpGridManager : Node2D
 
         int n = PhysNodesX * PhysNodesY;
         _stateScratch = new byte[n * StateStride];
-        _restScratch  = new byte[n * RestStride];
+        _restScratch = new byte[n * RestStride];
+
         using (var sMs = new MemoryStream(_stateScratch))
         using (var sBw = new BinaryWriter(sMs))
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
-            // Phase 13 — NodeState is now {h_curr, h_prev, dir.xy}; init all zero (flat field).
-            // RestState keeps anchor in ABSOLUTE PIXELS — effectors still compare against it
-            // to pick nodes within their radius.
             for (int y = 0; y < PhysNodesY; y++)
+            {
                 for (int x = 0; x < PhysNodesX; x++)
                 {
                     float px = (float)x / PhysGridW * GridSizePixels.X;
                     float py = (float)y / PhysGridH * GridSizePixels.Y;
-                    sBw.Write(0.0f); sBw.Write(0.0f);   // h_curr, h_prev
-                    sBw.Write(0.0f); sBw.Write(0.0f);   // dir.xy
+
+                    // NodeState = { current.xy, prev.xy } in absolute pixel space.
+                    sBw.Write(px); sBw.Write(py);
+                    sBw.Write(px); sBw.Write(py);
+
                     rBw.Write(px); rBw.Write(py);
-                    rBw.Write(RestAnchorWeight(x, y));  // per-cell weight (unused by wave, kept for ext.)
-                    rBw.Write(0.0f);                    // std430 trailing pad
+                    rBw.Write(RestAnchorWeight(x, y));
+                    rBw.Write(0.0f);
                 }
+            }
         }
 
         _bufStateA = _rd.StorageBufferCreate((uint)_stateScratch.Length, _stateScratch);
         _bufStateB = _rd.StorageBufferCreate((uint)_stateScratch.Length, _stateScratch);
-        _bufRest   = _rd.StorageBufferCreate((uint)_restScratch.Length,  _restScratch);
+        _bufRest = _rd.StorageBufferCreate((uint)_restScratch.Length, _restScratch);
 
         _effScratch = new byte[MaxEffectors * EffStride];
-        _bufEff     = _rd.StorageBufferCreate((uint)_effScratch.Length, _effScratch);
+        _bufEff = _rd.StorageBufferCreate((uint)_effScratch.Length, _effScratch);
 
         _paramScratch = new byte[ParamSize];
-        _bufParams    = _rd.UniformBufferCreate(ParamSize, _paramScratch);
+        _bufParams = _rd.UniformBufferCreate(ParamSize, _paramScratch);
 
         var fmt = new RDTextureFormat
         {
-            Width       = (uint)PhysNodesX,
-            Height      = (uint)PhysNodesY,
-            Format      = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
-            UsageBits   = RenderingDevice.TextureUsageBits.StorageBit
-                        | RenderingDevice.TextureUsageBits.SamplingBit
-                        | RenderingDevice.TextureUsageBits.CanCopyFromBit,
+            Width = (uint)PhysNodesX,
+            Height = (uint)PhysNodesY,
+            Format = RenderingDevice.DataFormat.R32G32B32A32Sfloat,
+            UsageBits = RenderingDevice.TextureUsageBits.StorageBit
+                      | RenderingDevice.TextureUsageBits.SamplingBit
+                      | RenderingDevice.TextureUsageBits.CanCopyFromBit,
             TextureType = RenderingDevice.TextureType.Type2D,
         };
         var view = new RDTextureView();
@@ -265,6 +270,7 @@ public partial class WarpGridManager : Node2D
             u.AddId(id);
             return u;
         }
+
         var set = new Godot.Collections.Array<RDUniform>
         {
             U(RenderingDevice.UniformType.StorageBuffer, 0, readBuf),
@@ -283,51 +289,44 @@ public partial class WarpGridManager : Node2D
         var shader = GD.Load<Shader>("res://shaders/WarpGridDisplay.gdshader");
         _material = new ShaderMaterial { Shader = shader };
 
-        // Only bind positions_tex when the compute pipeline actually produced an image RID.
-        // With no texture set, the sampler reads black (h=0, dir=0) and the grid renders at
-        // its anchor grid — exactly what we want for the at-rest preview in the editor.
         if (_imgPositions.IsValid)
         {
             _positionsTexture = new Texture2Drd { TextureRdRid = _imgPositions };
             _material.SetShaderParameter("positions_tex", _positionsTexture);
         }
+
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
-        // Phase 6.7: grid_dims mirrors PHYS cell count — procedural lines in Grid mode
-        // match the "actual" physics grid, not the visual tessellation density.
-        _material.SetShaderParameter("grid_dims",        new Vector2I(PhysGridW, PhysGridH));
-        // phys_tex_size lets the vertex shader bilinear-sample positions_tex with texel-center
-        // offset, so visual-mesh UV=0/1 lands exactly on physics texel(0) / texel(last).
-        _material.SetShaderParameter("phys_tex_size",    new Vector2(PhysNodesX, PhysNodesY));
-        _material.SetShaderParameter("line_color",       LineColor);
-        _material.SetShaderParameter("display_mode",      (int)_renderMode);
+        _material.SetShaderParameter("grid_dims", new Vector2I(PhysGridW, PhysGridH));
+        _material.SetShaderParameter("phys_tex_size", new Vector2(PhysNodesX, PhysNodesY));
+        _material.SetShaderParameter("line_color", LineColor);
+        _material.SetShaderParameter("display_mode", (int)_renderMode);
         if (MainTexture != null)
-            _material.SetShaderParameter("main_tex",     MainTexture);
+            _material.SetShaderParameter("main_tex", MainTexture);
+
         _meshInstance.Material = _material;
         _isInitialized = true;
     }
 
-    // Phase 6.7: 4 sub-steps per engine _PhysicsProcess, shader sees Dt = 1/240 s.
-    // At engine PhysicsTicksPerSecond=60 this gives 240 Hz internal rate. Effectors + UBO
-    // are uploaded once per engine frame (positions don't change mid-frame) while the compute
-    // kernel is dispatched 4× with ping-pong to let wavefronts propagate 4 cells per visible tick.
     public override void _PhysicsProcess(double delta)
     {
-        // Tool scripts tick in-editor too; bail out early if InitGpu() soft-failed or the
-        // scene is still being deserialized (setters can run pre-_Ready). _isInitialized
-        // closes the window between TeardownGpu and BuildMaterial during Rebuild().
         if (!_isInitialized || _rd == null) return;
+
         UploadEffectors();
-        UploadParams();
-        for (int i = 0; i < SubSteps; i++)
+
+        foreach (var phase in _dispatchPhases)
         {
+            UploadParams(phase);
             Dispatch();
             _readIsA = !_readIsA;
+            _lastDispatchPhase = phase;
         }
+
+        _rd.Submit();
+        _rd.Sync();
     }
 
     void UploadEffectors()
     {
-        // std430 SSBO layout — order-critical, must match WarpEffectorData struct in WarpGrid.glsl.
         Array.Clear(_effScratch, 0, _effScratch.Length);
         int count = 0;
         var gridOrigin = GlobalPosition;
@@ -339,46 +338,52 @@ public partial class WarpGridManager : Node2D
         foreach (Node n in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (count >= MaxEffectors) break;
-            if (n is not WarpEffector eff || !eff.Visible) continue; // Phase 5.1: hidden = no warp
+            if (n is not WarpEffector eff || !eff.Visible) continue;
 
-            // AABB cull: skip effectors whose influence box can't touch the grid.
             var p = eff.GlobalPosition;
             float r = eff.Radius;
             if (p.X + r < gridMin.X || p.X - r > gridMax.X) continue;
             if (p.Y + r < gridMin.Y || p.Y - r > gridMax.Y) continue;
 
             var d = eff.ToData(gridOrigin, GridSizePixels);
-            bw.Write(d.StartPoint.X);  bw.Write(d.StartPoint.Y);
-            bw.Write(d.EndPoint.X);    bw.Write(d.EndPoint.Y);
+            bw.Write(d.StartPoint.X); bw.Write(d.StartPoint.Y);
+            bw.Write(d.EndPoint.X); bw.Write(d.EndPoint.Y);
             bw.Write(d.Radius);
             bw.Write(d.Strength);
             bw.Write(d.ShapeType);
             bw.Write(d.BehaviorType);
             count++;
         }
+
         _effCount = (uint)count;
         _rd.BufferUpdate(_bufEff, 0, (uint)_effScratch.Length, _effScratch);
     }
 
-    void UploadParams()
+    void UploadParams(WarpGridDispatchPhase phase)
     {
-        // std140 UBO layout — order-critical, must match GridParams in WarpGrid.glsl.
-        // Phase 13 wave-model block, 48 bytes.
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
-        bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);   // grid_size    @ 0
-        float sx = GridSizePixels.X / PhysGridW;                  // grid_spacing @ 8 (pixels)
+
+        bw.Write((uint)PhysNodesX);
+        bw.Write((uint)PhysNodesY);
+
+        float sx = GridSizePixels.X / PhysGridW;
         float sy = GridSizePixels.Y / PhysGridH;
-        bw.Write(sx); bw.Write(sy);
-        bw.Write(_tension);                                       // tension      @ 16
-        bw.Write(_damping);                                       // damping      @ 20
-        bw.Write(_edgeDamp);                                      // edge_damp    @ 24
-        bw.Write(_dirDecay);                                      // dir_decay    @ 28
-        bw.Write(_effCount);                                      // effector_count @ 32
-        bw.Write(1.0f / SubSteps);                                // force_scaler @ 36
-        bw.Write(0.0f);                                           // _pad1        @ 40
-        bw.Write(0.0f);                                           // _pad2        @ 44
+        bw.Write(sx);
+        bw.Write(sy);
+
+        bw.Write(Mathf.Clamp(_neighborStiffness, 0.0f, 1.0f));
+        bw.Write(Mathf.Clamp(_anchorStiffness, 0.0f, 1.0f));
+        bw.Write(Mathf.Clamp(_globalDamping, 0.0f, 1.0f));
+        bw.Write(Mathf.Clamp(_friction, 0.0f, 1.0f));
+        bw.Write(_effCount);
+        bw.Write(1.0f / _subSteps);
+        bw.Write((uint)phase.Kind);
+        bw.Write(phase.ApplyEffectors ? 1u : 0u);
+        bw.Write(_boundaryPinning ? 1u : 0u);
+        bw.Write(0.0f);
+
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
 
@@ -396,11 +401,6 @@ public partial class WarpGridManager : Node2D
         _rd.ComputeListEnd();
     }
 
-    /// <summary>
-    /// Per-cell anchor weight stored in <c>RestState</c>. Unused by the current wave model,
-    /// retained for future extensions (e.g. per-cell <c>tension</c> or <c>damping</c> scaling).
-    /// Only read once at init; changing the map at runtime requires <c>Rebuild()</c>.
-    /// </summary>
     protected virtual float RestAnchorWeight(int x, int y) => 1.0f;
 
     public override void _ExitTree()
@@ -408,22 +408,19 @@ public partial class WarpGridManager : Node2D
         TeardownGpu();
     }
 
-    /// <summary>
-    /// v5: tear down all RD resources + the mesh child, then re-run BuildMesh + InitGpu
-    /// + BuildMaterial from scratch. Called automatically when GridW / GridH / GridSizePixels
-    /// change at runtime; can also be called manually after overriding RestAnchorWeight to
-    /// re-bake a new softness map. Resets ping-pong state.
-    /// </summary>
     public void Rebuild()
     {
-        // Order matters: drop the visual (material + mesh) BEFORE TeardownGpu, which itself
-        // clears the Texture2Drd → RID bridge centrally so the canvas renderer never samples
-        // a freshly-freed RID ("Texture … is not a valid texture").
-        if (_meshInstance != null) { _meshInstance.Free(); _meshInstance = null; }
+        if (_meshInstance != null)
+        {
+            _meshInstance.Free();
+            _meshInstance = null;
+        }
+
         _mesh = null;
         _material = null;
         TeardownGpu();
         _readIsA = true;
+        RefreshDispatchPlan();
         BuildMesh();
         InitGpu();
         BuildMaterial();
@@ -431,16 +428,14 @@ public partial class WarpGridManager : Node2D
 
     void MaybeRebuild()
     {
-        // Guard against setter invocations during Godot's scene deserialization (pre-_Ready,
-        // _rd is still null). Also no-op while we're in the middle of TeardownGpu.
-        if (_rd != null) Rebuild();
+        if (_rd != null)
+            Rebuild();
     }
 
     void MaybeUploadParams()
     {
-        // Hot-reload physics knobs from the Inspector. No-op when GPU isn't up yet — the
-        // next _Ready or Rebuild will pick up the field values on its first UploadParams.
-        if (_rd != null) UploadParams();
+        if (_rd != null)
+            UploadParams(_lastDispatchPhase);
     }
 
     void TeardownGpu()
@@ -448,17 +443,20 @@ public partial class WarpGridManager : Node2D
         GD.Print("[WarpGrid] TeardownGpu");
         _isInitialized = false;
         if (_rd == null) return;
-        // Sever the Texture2Drd → _imgPositions bridge BEFORE freeing the RID, otherwise the
-        // canvas renderer can dereference a dead RID on the next draw and log
-        // "Parameter 'us' is null" / "Texture … is not a valid texture".
-        if (_positionsTexture != null) { _positionsTexture.TextureRdRid = default; _positionsTexture = null; }
-        // Crash-safety: guard each RID so partial InitGpu failure (mid-construction) cleans up safely.
+
+        if (_positionsTexture != null)
+        {
+            _positionsTexture.TextureRdRid = default;
+            _positionsTexture = null;
+        }
+
         FreeIfValid(_uniformSetA); FreeIfValid(_uniformSetB);
         FreeIfValid(_imgPositions);
-        FreeIfValid(_bufStateA);   FreeIfValid(_bufStateB);
-        FreeIfValid(_bufRest);     FreeIfValid(_bufEff);
+        FreeIfValid(_bufStateA); FreeIfValid(_bufStateB);
+        FreeIfValid(_bufRest); FreeIfValid(_bufEff);
         FreeIfValid(_bufParams);
-        FreeIfValid(_pipeline);    FreeIfValid(_shader);
+        FreeIfValid(_pipeline); FreeIfValid(_shader);
+
         _uniformSetA = default; _uniformSetB = default;
         _imgPositions = default;
         _bufStateA = default; _bufStateB = default;
@@ -470,6 +468,7 @@ public partial class WarpGridManager : Node2D
 
     void FreeIfValid(Rid rid)
     {
-        if (rid.IsValid) _rd.FreeRid(rid);
+        if (rid.IsValid)
+            _rd.FreeRid(rid);
     }
 }
