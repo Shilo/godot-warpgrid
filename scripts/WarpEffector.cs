@@ -37,14 +37,18 @@ public partial class WarpEffector : Node2D
         var startPx = GlobalPosition - gridOrigin;
         var endPx = startPx + EndOffset;
         float ageSeconds = (float)(Time.GetTicksMsec() / 1000.0 - _spawnTimeSeconds);
+        bool isShockwave = Behavior == WarpBehaviorType.Shockwave;
+
         return new WarpEffectorData
         {
             StartPoint = startPx,
             EndPoint = endPx,
             Radius = Radius,
             Strength = Strength,
-            AnimatedRadius = Radius + (ShockwaveSpeed * Math.Max(ageSeconds, 0.0f)),
-            RingWidth = Math.Max(ShockwaveWidth, 1.0f),
+            AnimatedRadius = isShockwave
+                ? Radius + (ShockwaveSpeed * Math.Max(ageSeconds, 0.0f))
+                : Radius,
+            RingWidth = isShockwave ? Math.Max(ShockwaveWidth, 1.0f) : 0.0f,
             ShapeType = (uint)Shape,
             BehaviorType = (uint)Behavior,
         };

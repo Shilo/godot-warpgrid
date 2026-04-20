@@ -7,11 +7,7 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 ## Architecture
 
 - `scripts/WarpGridManager.cs`
-  CPU simulation, spring generation, effector injection, texture packing, and mesh/material setup.
-- `scripts/WarpGridPoint.cs`
-  Packed point state used by the solver.
-- `scripts/WarpGridSpring.cs`
-  Spring topology metadata for right, up, and original-position springs.
+  CPU simulation, flat SoA state buffers (`_posX/_posY`, `_velX/_velY`, `_accX/_accY`, `_anchorX/_anchorY`), direct-index spring evaluation, texture packing, and mesh/material setup.
 - `scripts/WarpEffector.cs`
   Pixel-space radial or directional force input.
 - `scripts/WarpMouseController.cs`
@@ -25,7 +21,7 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 
 - Physics lattice: `PhysicsGridW x PhysicsGridH` cells, with one anchor spring per node and cardinal springs across the grid.
 - Visual mesh: `GridW x GridH` cells, sampled against the lower-resolution positions texture.
-- Integration: semi-implicit Euler at Godot's fixed `_PhysicsProcess` cadence.
+- Integration: semi-implicit Euler, stepped through a fixed `1.0 / 120.0` accumulator inside `_PhysicsProcess`.
 - Boundary guard: perimeter nodes hard-pin to anchor when `ClampEdges` is enabled.
 - Sleep guard: nodes snap fully to rest once displacement and velocity fall below `1e-4`.
 

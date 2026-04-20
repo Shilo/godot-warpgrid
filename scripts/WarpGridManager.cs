@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot;
-using SimVector2 = System.Numerics.Vector2;
 
 namespace WarpGrid;
 
@@ -12,6 +11,7 @@ public enum VibePreset { Custom = 0, GeometryWars = 1 }
 [GlobalClass, Tool]
 public partial class WarpGridManager : Node2D
 {
+    const float FixedDt = 1.0f / 120.0f;
     const float SleepThreshold = 1e-4f;
     const float SpringEpsilon = 1e-6f;
 
@@ -27,6 +27,10 @@ public partial class WarpGridManager : Node2D
     float _anchorPull = 0.02f;
     float _mass = 1.0f;
     bool _clampEdges = true;
+
+    float _accumulator;
+    float _physicsSpacingX;
+    float _physicsSpacingY;
 
     WarpRenderMode _renderMode = WarpRenderMode.Grid;
     VibePreset _vibePreset = VibePreset.GeometryWars;
@@ -164,6 +168,7 @@ public partial class WarpGridManager : Node2D
     int PhysNodesY => _physicsGridH + 1;
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
+    int PointCount => PhysNodesX * PhysNodesY;
 
     ArrayMesh _mesh;
     MeshInstance2D _meshInstance;
@@ -171,40 +176,66 @@ public partial class WarpGridManager : Node2D
     Image _positionsImage;
     ImageTexture _positionsTexture;
 
-    WarpGridPoint[] _points = Array.Empty<WarpGridPoint>();
+    float[] _posX = Array.Empty<float>();
+    float[] _posY = Array.Empty<float>();
+    float[] _velX = Array.Empty<float>();
+    float[] _velY = Array.Empty<float>();
+    float[] _accX = Array.Empty<float>();
+    float[] _accY = Array.Empty<float>();
+    float[] _anchorX = Array.Empty<float>();
+    float[] _anchorY = Array.Empty<float>();
     bool[] _edgeMask = Array.Empty<bool>();
     bool[] _sleeping = Array.Empty<bool>();
-    SimVector2[] _springForces = Array.Empty<SimVector2>();
-    SimVector2[] _effectorForces = Array.Empty<SimVector2>();
     byte[] _positionsScratch = Array.Empty<byte>();
 
     readonly struct EffectorRuntime
     {
-        public readonly SimVector2 Start;
-        public readonly SimVector2 End;
-        public readonly SimVector2 DirectedUnit;
+        public readonly float StartX;
+        public readonly float StartY;
+        public readonly float EndX;
+        public readonly float EndY;
+        public readonly float DirectedX;
+        public readonly float DirectedY;
         public readonly float RadiusSq;
         public readonly float SigmaDenom;
         public readonly float Strength;
         public readonly float AnimatedRadius;
         public readonly float RingWidth;
+        public readonly float EffectiveRadius;
+        public readonly float EffectiveRadiusSq;
         public readonly uint ShapeType;
         public readonly WarpBehaviorType BehaviorType;
 
         public EffectorRuntime(WarpEffectorData data)
         {
-            Start = ToSimVector(data.StartPoint);
-            End = ToSimVector(data.EndPoint);
-            var directed = End - Start;
-            DirectedUnit = directed.LengthSquared() > SpringEpsilon
-                ? SimVector2.Normalize(directed)
-                : SimVector2.Zero;
+            StartX = data.StartPoint.X;
+            StartY = data.StartPoint.Y;
+            EndX = data.EndPoint.X;
+            EndY = data.EndPoint.Y;
+
+            float directedX = EndX - StartX;
+            float directedY = EndY - StartY;
+            float directedLenSq = (directedX * directedX) + (directedY * directedY);
+            if (directedLenSq > SpringEpsilon)
+            {
+                float invLen = 1.0f / MathF.Sqrt(directedLenSq);
+                DirectedX = directedX * invLen;
+                DirectedY = directedY * invLen;
+            }
+            else
+            {
+                DirectedX = 0.0f;
+                DirectedY = 0.0f;
+            }
+
             RadiusSq = data.Radius * data.Radius;
             float sigma = MathF.Max(data.Radius * 0.5f, 1e-4f);
             SigmaDenom = 2.0f * sigma * sigma;
             Strength = data.Strength;
             AnimatedRadius = data.AnimatedRadius;
             RingWidth = MathF.Max(data.RingWidth, 1.0f);
+            EffectiveRadius = MathF.Max(data.Radius, AnimatedRadius + RingWidth);
+            EffectiveRadiusSq = EffectiveRadius * EffectiveRadius;
             ShapeType = data.ShapeType;
             BehaviorType = (WarpBehaviorType)data.BehaviorType;
         }
@@ -230,6 +261,7 @@ public partial class WarpGridManager : Node2D
 
     public void Rebuild()
     {
+        _accumulator = 0.0f;
         VerifyTextureManifest();
         BuildMesh();
         BuildPhysicsGrid();
@@ -263,28 +295,36 @@ public partial class WarpGridManager : Node2D
 
     void BuildPhysicsGrid()
     {
-        int pointCount = PhysNodesX * PhysNodesY;
-        _points = new WarpGridPoint[pointCount];
+        int pointCount = PointCount;
+        _posX = new float[pointCount];
+        _posY = new float[pointCount];
+        _velX = new float[pointCount];
+        _velY = new float[pointCount];
+        _accX = new float[pointCount];
+        _accY = new float[pointCount];
+        _anchorX = new float[pointCount];
+        _anchorY = new float[pointCount];
         _edgeMask = new bool[pointCount];
         _sleeping = new bool[pointCount];
-        _springForces = new SimVector2[pointCount];
-        _effectorForces = new SimVector2[pointCount];
         _positionsScratch = new byte[pointCount * WarpGridGpuManifest.PositionTexelStride];
 
-        float spacingX = GridSizePixels.X / Math.Max(1, _physicsGridW);
-        float spacingY = GridSizePixels.Y / Math.Max(1, _physicsGridH);
+        _physicsSpacingX = GridSizePixels.X / Math.Max(1, _physicsGridW);
+        _physicsSpacingY = GridSizePixels.Y / Math.Max(1, _physicsGridH);
 
         for (int y = 0; y < PhysNodesY; y++)
         {
             for (int x = 0; x < PhysNodesX; x++)
             {
                 int index = IndexOf(x, y);
-                var anchor = new SimVector2(x * spacingX, y * spacingY);
-                _points[index] = new WarpGridPoint(anchor);
+                float anchorX = x * _physicsSpacingX;
+                float anchorY = y * _physicsSpacingY;
+                _anchorX[index] = anchorX;
+                _anchorY[index] = anchorY;
+                _posX[index] = anchorX;
+                _posY[index] = anchorY;
                 _edgeMask[index] = x == 0 || y == 0 || x == PhysNodesX - 1 || y == PhysNodesY - 1;
             }
         }
-
     }
 
     void BuildMaterial()
@@ -313,86 +353,119 @@ public partial class WarpGridManager : Node2D
 
     public override void _PhysicsProcess(double delta)
     {
-        if (_points.Length == 0 || _positionsTexture == null)
+        if (_posX.Length == 0 || _positionsTexture == null)
             return;
 
-        SimulatePhysics();
+        _accumulator += (float)delta;
+        while (_accumulator >= FixedDt)
+        {
+            SimulatePhysics(FixedDt);
+            _accumulator -= FixedDt;
+        }
+
         UploadPositionsTexture();
     }
 
-    void SimulatePhysics()
+    void SimulatePhysics(float dt)
     {
+        _ = dt;
+
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
 
-        Parallel.For(0, _points.Length, i =>
+        Parallel.For(0, PointCount, i =>
         {
-            ref var point = ref _points[i];
-            point.Acceleration = SimVector2.Zero;
-            var displacement = point.Position - point.Anchor;
-            _sleeping[i] = displacement.LengthSquared() <= sleepSq && _points[i].Velocity.LengthSquared() <= sleepSq;
-            _springForces[i] = SimVector2.Zero;
-            _effectorForces[i] = SimVector2.Zero;
+            _accX[i] = 0.0f;
+            _accY[i] = 0.0f;
+
+            float displacementX = _posX[i] - _anchorX[i];
+            float displacementY = _posY[i] - _anchorY[i];
+            float velocityX = _velX[i];
+            float velocityY = _velY[i];
+            _sleeping[i] =
+                (displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
+                (velocityX * velocityX) + (velocityY * velocityY) <= sleepSq;
         });
 
-        EffectorRuntime[] effectors = GatherActiveEffectors();
+        var effectors = GatherActiveEffectors();
         ApplyEffectors(effectors);
         ApplySpringForces();
 
-        Parallel.For(0, _points.Length, i =>
+        Parallel.For(0, PointCount, i =>
         {
-            ref var point = ref _points[i];
-            point.Acceleration = _springForces[i] + _effectorForces[i];
-
             if (_clampEdges && _edgeMask[i])
             {
-                point.Position = point.Anchor;
-                point.Velocity = SimVector2.Zero;
-                point.Acceleration = SimVector2.Zero;
+                _posX[i] = _anchorX[i];
+                _posY[i] = _anchorY[i];
+                _velX[i] = 0.0f;
+                _velY[i] = 0.0f;
+                _accX[i] = 0.0f;
+                _accY[i] = 0.0f;
                 _sleeping[i] = true;
-                continue;
+                return;
             }
 
-            if (_sleeping[i] && point.Acceleration.LengthSquared() <= sleepSq)
+            float accX = _accX[i];
+            float accY = _accY[i];
+            if (_sleeping[i] && ((accX * accX) + (accY * accY) <= sleepSq))
             {
-                point.Position = point.Anchor;
-                point.Velocity = SimVector2.Zero;
-                point.Acceleration = SimVector2.Zero;
-                continue;
+                _posX[i] = _anchorX[i];
+                _posY[i] = _anchorY[i];
+                _velX[i] = 0.0f;
+                _velY[i] = 0.0f;
+                _accX[i] = 0.0f;
+                _accY[i] = 0.0f;
+                return;
             }
 
-            point.Velocity += point.Acceleration * invMass;
-            point.Velocity *= _globalDamping;
-            point.Position += point.Velocity;
-            point.Acceleration = SimVector2.Zero;
+            float velX = _velX[i] + (accX * invMass);
+            float velY = _velY[i] + (accY * invMass);
+            velX *= _globalDamping;
+            velY *= _globalDamping;
 
-            var displacement = point.Position - point.Anchor;
-            if (displacement.LengthSquared() <= sleepSq && point.Velocity.LengthSquared() <= sleepSq)
+            float posX = _posX[i] + velX;
+            float posY = _posY[i] + velY;
+
+            _velX[i] = velX;
+            _velY[i] = velY;
+            _posX[i] = posX;
+            _posY[i] = posY;
+            _accX[i] = 0.0f;
+            _accY[i] = 0.0f;
+
+            float displacementX = posX - _anchorX[i];
+            float displacementY = posY - _anchorY[i];
+            if ((displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
+                (velX * velX) + (velY * velY) <= sleepSq)
             {
-                point.Position = point.Anchor;
-                point.Velocity = SimVector2.Zero;
+                _posX[i] = _anchorX[i];
+                _posY[i] = _anchorY[i];
+                _velX[i] = 0.0f;
+                _velY[i] = 0.0f;
             }
         });
     }
 
     EffectorRuntime[] GatherActiveEffectors()
     {
-        var gridOrigin = ToSimVector(GlobalPosition);
-        var gridMin = gridOrigin;
-        var gridMax = gridOrigin + ToSimVector(GridSizePixels);
-        var active = new List<EffectorRuntime>();
+        float gridOriginX = GlobalPosition.X;
+        float gridOriginY = GlobalPosition.Y;
+        float gridMaxX = gridOriginX + GridSizePixels.X;
+        float gridMaxY = gridOriginY + GridSizePixels.Y;
 
+        var active = new List<EffectorRuntime>();
         foreach (Node node in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (node is not WarpEffector eff || !eff.Visible)
                 continue;
 
             WarpEffectorData data = eff.ToData(GlobalPosition, GridSizePixels);
-            var globalPos = ToSimVector(eff.GlobalPosition);
+            float globalX = eff.GlobalPosition.X;
+            float globalY = eff.GlobalPosition.Y;
             float effectiveRadius = MathF.Max(data.Radius, data.AnimatedRadius + data.RingWidth);
-            if (globalPos.X + effectiveRadius < gridMin.X || globalPos.X - effectiveRadius > gridMax.X)
+            if (globalX + effectiveRadius < gridOriginX || globalX - effectiveRadius > gridMaxX)
                 continue;
-            if (globalPos.Y + effectiveRadius < gridMin.Y || globalPos.Y - effectiveRadius > gridMax.Y)
+            if (globalY + effectiveRadius < gridOriginY || globalY - effectiveRadius > gridMaxY)
                 continue;
 
             active.Add(new EffectorRuntime(data));
@@ -406,44 +479,71 @@ public partial class WarpGridManager : Node2D
         if (effectors.Length == 0)
             return;
 
-        Parallel.For(0, _points.Length, i =>
+        Parallel.For(0, PointCount, i =>
         {
-            ref readonly var point = ref _points[i];
-            SimVector2 totalForce = SimVector2.Zero;
+            float px = _posX[i];
+            float py = _posY[i];
+            float totalX = 0.0f;
+            float totalY = 0.0f;
 
             foreach (var effector in effectors)
             {
-                SimVector2 center = effector.ShapeType == (uint)WarpShapeType.Line
-                    ? ClosestPointOnSegment(effector.Start, effector.End, point.Position)
-                    : effector.Start;
+                float centerX = effector.StartX;
+                float centerY = effector.StartY;
+                if (effector.ShapeType == (uint)WarpShapeType.Line)
+                {
+                    ClosestPointOnSegment(
+                        effector.StartX,
+                        effector.StartY,
+                        effector.EndX,
+                        effector.EndY,
+                        px,
+                        py,
+                        out centerX,
+                        out centerY);
+                }
 
-                SimVector2 delta = point.Position - center;
-                float distanceSq = delta.LengthSquared();
-                if (distanceSq > effector.RadiusSq)
+                float deltaX = px - centerX;
+                float deltaY = py - centerY;
+                float distanceSq = (deltaX * deltaX) + (deltaY * deltaY);
+                float maxDistanceSq = effector.BehaviorType == WarpBehaviorType.Shockwave
+                    ? effector.EffectiveRadiusSq
+                    : effector.RadiusSq;
+                if (distanceSq > maxDistanceSq)
                     continue;
 
                 float distance = distanceSq > SpringEpsilon ? MathF.Sqrt(distanceSq) : 0.0f;
-                SimVector2 outward = distanceSq > SpringEpsilon ? delta / distance : SimVector2.Zero;
-                float gaussianFalloff = MathF.Exp(-distanceSq / effector.SigmaDenom);
+                float outwardX = 0.0f;
+                float outwardY = 0.0f;
+                if (distanceSq > SpringEpsilon)
+                {
+                    float invDistance = 1.0f / distance;
+                    outwardX = deltaX * invDistance;
+                    outwardY = deltaY * invDistance;
+                }
 
-                SimVector2 direction = effector.ShapeType == (uint)WarpShapeType.Radial &&
-                                       effector.DirectedUnit.LengthSquared() > SpringEpsilon
-                    ? effector.DirectedUnit
-                    : outward;
+                float directionX = effector.ShapeType == (uint)WarpShapeType.Radial &&
+                                   ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
+                    ? effector.DirectedX
+                    : outwardX;
+                float directionY = effector.ShapeType == (uint)WarpShapeType.Radial &&
+                                   ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
+                    ? effector.DirectedY
+                    : outwardY;
 
-                float magnitude = effector.Strength * gaussianFalloff;
-
+                float magnitude = effector.Strength * MathF.Exp(-distanceSq / effector.SigmaDenom);
                 switch (effector.BehaviorType)
                 {
                     case WarpBehaviorType.Impulse:
                         magnitude *= 2.0f;
                         break;
                     case WarpBehaviorType.Vortex:
-                        direction = NormalizeOrZero(new SimVector2(-delta.Y, delta.X));
+                        NormalizeOrZero(-deltaY, deltaX, out directionX, out directionY);
                         magnitude *= 1.35f;
                         break;
                     case WarpBehaviorType.GravityWell:
-                        direction = -outward;
+                        directionX = -outwardX;
+                        directionY = -outwardY;
                         magnitude *= 1.25f;
                         break;
                     case WarpBehaviorType.Shockwave:
@@ -454,70 +554,81 @@ public partial class WarpGridManager : Node2D
 
                         float ringFalloff = 1.0f - (ringDistance / effector.RingWidth);
                         magnitude = effector.Strength * ringFalloff * ringFalloff;
-                        direction = outward;
+                        directionX = outwardX;
+                        directionY = outwardY;
                         break;
                     }
                 }
 
-                totalForce += direction * magnitude;
+                totalX += directionX * magnitude;
+                totalY += directionY * magnitude;
             }
 
-            _effectorForces[i] = totalForce;
+            _accX[i] = totalX;
+            _accY[i] = totalY;
         });
     }
 
     void ApplySpringForces()
     {
         float sleepSq = SleepThreshold * SleepThreshold;
-        float restX = GridSizePixels.X / Math.Max(1, _physicsGridW);
-        float restY = GridSizePixels.Y / Math.Max(1, _physicsGridH);
+        float restX = _physicsSpacingX;
+        float restY = _physicsSpacingY;
 
-        Parallel.For(0, _points.Length, i =>
+        Parallel.For(0, PointCount, i =>
         {
-            ref readonly var point = ref _points[i];
-            SimVector2 totalForce = SimVector2.Zero;
+            float totalX = _accX[i];
+            float totalY = _accY[i];
 
-            if (!(_sleeping[i] && _effectorForces[i].LengthSquared() <= sleepSq))
+            if (!(_sleeping[i] && ((_accX[i] * _accX[i]) + (_accY[i] * _accY[i]) <= sleepSq)))
             {
-                SimVector2 anchorOffset = point.Anchor - point.Position;
-                if (anchorOffset.LengthSquared() > sleepSq || point.Velocity.LengthSquared() > sleepSq)
-                    totalForce += (anchorOffset * _anchorPull) - (point.Velocity * _springDamping);
+                float anchorOffsetX = _anchorX[i] - _posX[i];
+                float anchorOffsetY = _anchorY[i] - _posY[i];
+                if ((anchorOffsetX * anchorOffsetX) + (anchorOffsetY * anchorOffsetY) > sleepSq ||
+                    (_velX[i] * _velX[i]) + (_velY[i] * _velY[i]) > sleepSq)
+                {
+                    totalX += (anchorOffsetX * _anchorPull) - (_velX[i] * _springDamping);
+                    totalY += (anchorOffsetY * _anchorPull) - (_velY[i] * _springDamping);
+                }
             }
 
             int x = i % PhysNodesX;
-            int y = i / PhysNodesX;
 
             if (x > 0)
-                totalForce += ComputeNeighborForce(i, IndexOf(x - 1, y), restX);
+                AddNeighborForce(i, i - 1, restX, ref totalX, ref totalY);
             if (x + 1 < PhysNodesX)
-                totalForce += ComputeNeighborForce(i, IndexOf(x + 1, y), restX);
-            if (y > 0)
-                totalForce += ComputeNeighborForce(i, IndexOf(x, y - 1), restY);
-            if (y + 1 < PhysNodesY)
-                totalForce += ComputeNeighborForce(i, IndexOf(x, y + 1), restY);
+                AddNeighborForce(i, i + 1, restX, ref totalX, ref totalY);
+            if (i >= PhysNodesX)
+                AddNeighborForce(i, i - PhysNodesX, restY, ref totalX, ref totalY);
+            if (i + PhysNodesX < PointCount)
+                AddNeighborForce(i, i + PhysNodesX, restY, ref totalX, ref totalY);
 
-            _springForces[i] = totalForce;
+            _accX[i] = totalX;
+            _accY[i] = totalY;
         });
     }
 
-    SimVector2 ComputeNeighborForce(int pointIndex, int neighborIndex, float restLength)
+    void AddNeighborForce(int pointIndex, int neighborIndex, float restLength, ref float totalX, ref float totalY)
     {
-        ref readonly var point = ref _points[pointIndex];
-        ref readonly var neighbor = ref _points[neighborIndex];
-
-        SimVector2 offset = neighbor.Position - point.Position;
-        float distanceSq = offset.LengthSquared();
+        float offsetX = _posX[neighborIndex] - _posX[pointIndex];
+        float offsetY = _posY[neighborIndex] - _posY[pointIndex];
+        float distanceSq = (offsetX * offsetX) + (offsetY * offsetY);
         float restLengthSq = restLength * restLength;
         if (distanceSq <= restLengthSq)
-            return SimVector2.Zero;
+            return;
 
         float distance = MathF.Sqrt(distanceSq);
         if (distance <= SpringEpsilon)
-            return SimVector2.Zero;
+            return;
 
-        SimVector2 springOffset = offset * ((distance - restLength) / distance);
-        SimVector2 velocityDelta = neighbor.Velocity - point.Velocity;
-        return (springOffset * _springStiffness) + (velocityDelta * _springDamping);
+        float springScale = (distance - restLength) / distance;
+        float springOffsetX = offsetX * springScale;
+        float springOffsetY = offsetY * springScale;
+        float velocityDiffX = _velX[neighborIndex] - _velX[pointIndex];
+        float velocityDiffY = _velY[neighborIndex] - _velY[pointIndex];
+
+        totalX += (springOffsetX * _springStiffness) - (velocityDiffX * _springDamping);
+        totalY += (springOffsetY * _springStiffness) - (velocityDiffY * _springDamping);
     }
 
     void UploadPositionsTexture()
@@ -525,17 +636,16 @@ public partial class WarpGridManager : Node2D
         if (_positionsImage == null || _positionsTexture == null)
             return;
 
-        for (int i = 0; i < _points.Length; i++)
+        for (int i = 0; i < PointCount; i++)
         {
             int byteOffset = i * WarpGridGpuManifest.PositionTexelStride;
-            ref readonly var point = ref _points[i];
             WarpGridGpuManifest.WriteTexel(
                 _positionsScratch.AsSpan(byteOffset, WarpGridGpuManifest.PositionTexelStride),
                 new WarpGridGpuManifest.PackedTexelData(
-                    point.Position.X,
-                    point.Position.Y,
-                    point.Anchor.X,
-                    point.Anchor.Y));
+                    _posX[i],
+                    _posY[i],
+                    _anchorX[i],
+                    _anchorY[i]));
         }
 
         _positionsImage.SetData(
@@ -555,24 +665,48 @@ public partial class WarpGridManager : Node2D
             Rebuild();
     }
 
-    static SimVector2 ClosestPointOnSegment(SimVector2 start, SimVector2 end, SimVector2 point)
+    static void ClosestPointOnSegment(
+        float startX,
+        float startY,
+        float endX,
+        float endY,
+        float pointX,
+        float pointY,
+        out float closestX,
+        out float closestY)
     {
-        SimVector2 segment = end - start;
-        float denom = segment.LengthSquared();
+        float segmentX = endX - startX;
+        float segmentY = endY - startY;
+        float denom = (segmentX * segmentX) + (segmentY * segmentY);
         if (denom <= SpringEpsilon)
-            return start;
+        {
+            closestX = startX;
+            closestY = startY;
+            return;
+        }
 
-        float t = Math.Clamp(SimVector2.Dot(point - start, segment) / denom, 0.0f, 1.0f);
-        return start + (segment * t);
+        float t = Math.Clamp(
+            (((pointX - startX) * segmentX) + ((pointY - startY) * segmentY)) / denom,
+            0.0f,
+            1.0f);
+        closestX = startX + (segmentX * t);
+        closestY = startY + (segmentY * t);
     }
 
-    static SimVector2 NormalizeOrZero(SimVector2 value)
+    static void NormalizeOrZero(float x, float y, out float nx, out float ny)
     {
-        float lengthSq = value.LengthSquared();
-        return lengthSq <= SpringEpsilon ? SimVector2.Zero : SimVector2.Normalize(value);
-    }
+        float lengthSq = (x * x) + (y * y);
+        if (lengthSq <= SpringEpsilon)
+        {
+            nx = 0.0f;
+            ny = 0.0f;
+            return;
+        }
 
-    static SimVector2 ToSimVector(Vector2 value) => new(value.X, value.Y);
+        float invLength = 1.0f / MathF.Sqrt(lengthSq);
+        nx = x * invLength;
+        ny = y * invLength;
+    }
 
     void VerifyTextureManifest()
     {
