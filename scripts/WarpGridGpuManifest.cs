@@ -1,75 +1,67 @@
 using System;
-using System.IO;
+using System.Buffers.Binary;
+using Godot;
 
 namespace WarpGrid;
 
 public static class WarpGridGpuManifest
 {
-    public const int ParamSize = 48;
-    public const int ForceScalerOffset = 36;
-    public const int AnchorStiffnessOffset = 40;
-    public const int Padding2Offset = 44;
+    public const int PackedTexelSizeBytes = 16;
+    public const int PositionTexelStride = PackedTexelSizeBytes;
+    public static readonly Image.Format PositionImageFormat = Image.Format.Rgbaf;
 
-    static readonly (string Fragment, int Offset)[] GridParamsManifest =
+    private static readonly string[] DisplayShaderContractFragments =
     {
-        ("uvec2 grid_size;         // offset 0", 0),
-        ("vec2  grid_spacing;      // offset 8", 8),
-        ("float tension;           // offset 16", 16),
-        ("float damping;           // offset 20", 20),
-        ("float edge_damp;         // offset 24", 24),
-        ("float dir_decay;         // offset 28", 28),
-        ("uint  effector_count;    // offset 32", 32),
-        ("float force_scaler;      // offset 36", 36),
-        ("float anchor_stiffness;  // offset 40", 40),
-        ("float _pad2;             // offset 44", 44),
+        "uniform sampler2D positions_tex : filter_linear;",
+        "// positions_tex is CPU-packed RGBA32F:",
+        "// .xy = current position in pixels",
+        "// .zw = anchor position in pixels",
+        "v_warp = position - anchor;",
+        "v_energy = length(v_warp);",
     };
 
-    public readonly record struct GridParamsData(
-        uint GridSizeX,
-        uint GridSizeY,
-        float GridSpacingX,
-        float GridSpacingY,
-        float Tension,
-        float Damping,
-        float EdgeDamp,
-        float DirDecay,
-        uint EffectorCount,
-        float ForceScaler,
-        float AnchorStiffness);
+    public readonly record struct PackedTexelData(
+        float PositionX,
+        float PositionY,
+        float AnchorX,
+        float AnchorY);
 
-    public static void VerifyGridParamsManifest(string shaderSource)
+    public static void VerifyDisplayShaderContract(string shaderSource)
     {
         ArgumentNullException.ThrowIfNull(shaderSource);
 
-        foreach (var (fragment, offset) in GridParamsManifest)
+        foreach (string fragment in DisplayShaderContractFragments)
         {
             if (!shaderSource.Contains(fragment, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"GridParams manifest mismatch at offset {offset}: missing '{fragment}'.");
+                    $"WarpGrid display shader contract mismatch: missing '{fragment}'.");
             }
         }
     }
 
-    public static byte[] PackGridParams(in GridParamsData data)
+    public static void VerifyPositionsTextureManifest(string shaderSource) =>
+        VerifyDisplayShaderContract(shaderSource);
+
+    public static byte[] PackTexel(in PackedTexelData data)
     {
-        var packed = new byte[ParamSize];
-        using var ms = new MemoryStream(packed);
-        using var bw = new BinaryWriter(ms);
-
-        bw.Write(data.GridSizeX);
-        bw.Write(data.GridSizeY);
-        bw.Write(data.GridSpacingX);
-        bw.Write(data.GridSpacingY);
-        bw.Write(data.Tension);
-        bw.Write(data.Damping);
-        bw.Write(data.EdgeDamp);
-        bw.Write(data.DirDecay);
-        bw.Write(data.EffectorCount);
-        bw.Write(data.ForceScaler);
-        bw.Write(data.AnchorStiffness);
-        bw.Write(0.0f);
-
+        var packed = new byte[PackedTexelSizeBytes];
+        WriteTexel(packed, data);
         return packed;
+    }
+
+    public static void WriteTexel(Span<byte> destination, in PackedTexelData data)
+    {
+        if (destination.Length < PackedTexelSizeBytes)
+        {
+            throw new ArgumentException(
+                $"Destination span must be at least {PackedTexelSizeBytes} bytes.",
+                nameof(destination));
+        }
+
+        BinaryPrimitives.WriteSingleLittleEndian(destination[0..4], data.PositionX);
+        BinaryPrimitives.WriteSingleLittleEndian(destination[4..8], data.PositionY);
+        BinaryPrimitives.WriteSingleLittleEndian(destination[8..12], data.AnchorX);
+        BinaryPrimitives.WriteSingleLittleEndian(destination[12..16], data.AnchorY);
     }
 }

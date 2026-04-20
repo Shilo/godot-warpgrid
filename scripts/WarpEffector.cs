@@ -25,17 +25,17 @@ public partial class WarpEffector : Node2D
 
     public WarpEffectorData ToData(Vector2 gridOrigin, Vector2 gridSizePixels)
     {
-        // Phase 7: pixel-space physics — positions and radius feed the shader as ABSOLUTE
-        // PIXELS (same frame as node positions). No normalization; no min-dim scaling.
+        // CPU mass-spring input: keep the effector in pixel space so the solver can
+        // consume the same coordinates the scene uses for placement.
         var startPx = GlobalPosition - gridOrigin;
-        var endPx   = startPx + EndOffset;
+        var endPx = startPx + EndOffset;
         return new WarpEffectorData
         {
-            StartPoint   = startPx,
-            EndPoint     = endPx,
-            Radius       = Radius,
-            Strength     = Strength,
-            ShapeType    = (uint)Shape,
+            StartPoint = startPx,
+            EndPoint = endPx,
+            Radius = Radius,
+            Strength = Strength,
+            ShapeType = (uint)Shape,
             BehaviorType = (uint)Behavior,
         };
     }

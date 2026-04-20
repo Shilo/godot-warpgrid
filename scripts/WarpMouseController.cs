@@ -6,16 +6,16 @@ namespace WarpGrid;
 [GlobalClass, Tool]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 10.0f;  // Phase 13.1 — arcade-snappy brush, additive each tick
-    [Export] public float ImpulseStrength = 50.0f;  // Phase 13.1 — middle-click punch
-    [Export] public float CursorRadius    = 50.0f; // Phase 12.6 — wide kickstart, wave seeded across many nodes
+    [Export] public float ForceStrength   = 10.0f;  // Arcade-snappy brush: held input keeps feeding the CPU solver each tick.
+    [Export] public float ImpulseStrength = 50.0f;  // Middle-click punch for a single burst in the mass-spring grid.
+    [Export] public float CursorRadius    = 50.0f; // Broad cursor brush so the deformation reads like a Geometry Wars wake.
     // Hover preview for the editor viewport: applies ForceStrength every tick at the cursor
-    // so tuning Tension/Damping doesn't require entering Play mode. Tick off if the constant
-    // ripple is distracting.
+    // so tuning tension and damping is possible without entering Play mode. Turn it off if
+    // the live deformation is distracting.
     [Export] public bool  EditorPreview   = true;
     // Editor input is typically "held-static" (user parks the cursor and holds Ctrl while
-    // tweaking the Inspector) which pumps energy every tick. Scale the modifier force down
-    // so the wave field doesn't saturate before the user lets go.
+    // tweaking the Inspector), which pumps energy every tick. Scale the modifier force down
+    // so the grid does not saturate before the user lets go.
     [Export] public float EditorForceMultiplier = 0.2f;
 
     private WarpEffector _effector;
@@ -63,8 +63,8 @@ public partial class WarpMouseController : Node2D
             float editorStrength = ForceStrength * EditorForceMultiplier;
             if (ctrl && shift)      ApplyEffectorState(-editorStrength, WarpBehaviorType.Force);
             else if (ctrl)          ApplyEffectorState( editorStrength, WarpBehaviorType.Force);
-            // Hover preview stays visible + tracks the cursor at zero strength. Holding a
-            // modifier is the ONLY way to pump energy into the grid — otherwise each tick
+            // Hover preview stays visible and tracks the cursor at zero strength. Holding a
+            // modifier is the only way to pump energy into the grid; otherwise each tick
             // would add ForceStrength and blow the wave field out to saturation.
             else if (EditorPreview) ApplyEffectorState(0.0f, WarpBehaviorType.Force);
             else                    _effector.Visible = false;
