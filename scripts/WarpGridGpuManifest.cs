@@ -13,11 +13,14 @@ public static class WarpGridGpuManifest
     private static readonly string[] DisplayShaderContractFragments =
     {
         "uniform sampler2D positions_tex : filter_linear;",
+        "uniform ivec2 display_grid_dims;",
+        "uniform float physics_min_spacing = 32.0;",
         "// positions_tex is CPU-packed RGBA32F:",
         "// .xy = current position in pixels",
         "// .zw = anchor position in pixels",
+        "vec2 sample_uv = (uv * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;",
         "v_warp = position - anchor;",
-        "v_energy = length(v_warp);",
+        "return length(warp) / max(physics_min_spacing, 1.0);",
     };
 
     public readonly record struct PackedTexelData(

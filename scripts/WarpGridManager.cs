@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Godot;
 
@@ -12,6 +12,7 @@ public enum VibePreset { Custom = 0, GeometryWars = 1 }
 public partial class WarpGridManager : Node2D
 {
     const float FixedDt = 1.0f / 120.0f;
+    const int MaxPhysicsStepsPerFrame = 8;
     const float SleepThreshold = 1e-4f;
     const float SpringEpsilon = 1e-6f;
 
@@ -31,6 +32,8 @@ public partial class WarpGridManager : Node2D
     float _accumulator;
     float _physicsSpacingX;
     float _physicsSpacingY;
+    int _parallelBatchSize;
+    bool _positionsDirty = true;
 
     WarpRenderMode _renderMode = WarpRenderMode.Grid;
     VibePreset _vibePreset = VibePreset.GeometryWars;
@@ -187,6 +190,8 @@ public partial class WarpGridManager : Node2D
     bool[] _edgeMask = Array.Empty<bool>();
     bool[] _sleeping = Array.Empty<bool>();
     byte[] _positionsScratch = Array.Empty<byte>();
+    EffectorRuntime[] _effectorScratch = Array.Empty<EffectorRuntime>();
+    OrderablePartitioner<Tuple<int, int>> _pointRanges;
 
     readonly struct EffectorRuntime
     {
@@ -307,6 +312,8 @@ public partial class WarpGridManager : Node2D
         _edgeMask = new bool[pointCount];
         _sleeping = new bool[pointCount];
         _positionsScratch = new byte[pointCount * WarpGridGpuManifest.PositionTexelStride];
+        _parallelBatchSize = ComputeBatchSize(pointCount);
+        _pointRanges = Partitioner.Create(0, pointCount, _parallelBatchSize);
 
         _physicsSpacingX = GridSizePixels.X / Math.Max(1, _physicsGridW);
         _physicsSpacingY = GridSizePixels.Y / Math.Max(1, _physicsGridH);
@@ -325,6 +332,8 @@ public partial class WarpGridManager : Node2D
                 _edgeMask[index] = x == 0 || y == 0 || x == PhysNodesX - 1 || y == PhysNodesY - 1;
             }
         }
+
+        _positionsDirty = true;
     }
 
     void BuildMaterial()
@@ -341,8 +350,9 @@ public partial class WarpGridManager : Node2D
 
         _material.SetShaderParameter("positions_tex", _positionsTexture);
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
-        _material.SetShaderParameter("grid_dims", new Vector2I(_physicsGridW, _physicsGridH));
+        _material.SetShaderParameter("display_grid_dims", new Vector2I(_gridW, _gridH));
         _material.SetShaderParameter("phys_tex_size", new Vector2(PhysNodesX, PhysNodesY));
+        _material.SetShaderParameter("physics_min_spacing", MathF.Max(MathF.Min(_physicsSpacingX, _physicsSpacingY), 1.0f));
         _material.SetShaderParameter("line_color", LineColor);
         _material.SetShaderParameter("display_mode", (int)_renderMode);
         if (MainTexture != null)
@@ -356,110 +366,126 @@ public partial class WarpGridManager : Node2D
         if (_posX.Length == 0 || _positionsTexture == null)
             return;
 
-        _accumulator += (float)delta;
-        while (_accumulator >= FixedDt)
+        _accumulator = MathF.Min(_accumulator + (float)delta, FixedDt * MaxPhysicsStepsPerFrame);
+
+        bool stepped = false;
+        int steps = 0;
+        while (_accumulator >= FixedDt && steps < MaxPhysicsStepsPerFrame)
         {
-            SimulatePhysics(FixedDt);
+            SimulatePhysics();
             _accumulator -= FixedDt;
+            stepped = true;
+            steps++;
         }
 
-        UploadPositionsTexture();
+        if (stepped)
+            _positionsDirty = true;
+
+        if (_positionsDirty)
+            UploadPositionsTexture();
     }
 
-    void SimulatePhysics(float dt)
+    void SimulatePhysics()
     {
-        _ = dt;
-
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
 
-        Parallel.For(0, PointCount, i =>
+        ForEachPointRange((start, end) =>
         {
-            _accX[i] = 0.0f;
-            _accY[i] = 0.0f;
+            for (int i = start; i < end; i++)
+            {
+                _accX[i] = 0.0f;
+                _accY[i] = 0.0f;
 
-            float displacementX = _posX[i] - _anchorX[i];
-            float displacementY = _posY[i] - _anchorY[i];
-            float velocityX = _velX[i];
-            float velocityY = _velY[i];
-            _sleeping[i] =
-                (displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
-                (velocityX * velocityX) + (velocityY * velocityY) <= sleepSq;
+                float displacementX = _posX[i] - _anchorX[i];
+                float displacementY = _posY[i] - _anchorY[i];
+                float velocityX = _velX[i];
+                float velocityY = _velY[i];
+                _sleeping[i] =
+                    (displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
+                    (velocityX * velocityX) + (velocityY * velocityY) <= sleepSq;
+            }
         });
 
-        var effectors = GatherActiveEffectors();
-        ApplyEffectors(effectors);
+        int effectorCount = GatherActiveEffectors();
+        ApplyEffectors(effectorCount);
         ApplySpringForces();
 
-        Parallel.For(0, PointCount, i =>
+        ForEachPointRange((start, end) =>
         {
-            if (_clampEdges && _edgeMask[i])
+            for (int i = start; i < end; i++)
             {
-                _posX[i] = _anchorX[i];
-                _posY[i] = _anchorY[i];
-                _velX[i] = 0.0f;
-                _velY[i] = 0.0f;
+                if (_clampEdges && _edgeMask[i])
+                {
+                    _posX[i] = _anchorX[i];
+                    _posY[i] = _anchorY[i];
+                    _velX[i] = 0.0f;
+                    _velY[i] = 0.0f;
+                    _accX[i] = 0.0f;
+                    _accY[i] = 0.0f;
+                    _sleeping[i] = true;
+                    continue;
+                }
+
+                float accX = _accX[i];
+                float accY = _accY[i];
+                if (_sleeping[i] && ((accX * accX) + (accY * accY) <= sleepSq))
+                {
+                    _posX[i] = _anchorX[i];
+                    _posY[i] = _anchorY[i];
+                    _velX[i] = 0.0f;
+                    _velY[i] = 0.0f;
+                    _accX[i] = 0.0f;
+                    _accY[i] = 0.0f;
+                    continue;
+                }
+
+                float velX = _velX[i] + (accX * invMass);
+                float velY = _velY[i] + (accY * invMass);
+                velX *= _globalDamping;
+                velY *= _globalDamping;
+
+                float posX = _posX[i] + velX;
+                float posY = _posY[i] + velY;
+
+                _velX[i] = velX;
+                _velY[i] = velY;
+                _posX[i] = posX;
+                _posY[i] = posY;
                 _accX[i] = 0.0f;
                 _accY[i] = 0.0f;
-                _sleeping[i] = true;
-                return;
-            }
 
-            float accX = _accX[i];
-            float accY = _accY[i];
-            if (_sleeping[i] && ((accX * accX) + (accY * accY) <= sleepSq))
-            {
-                _posX[i] = _anchorX[i];
-                _posY[i] = _anchorY[i];
-                _velX[i] = 0.0f;
-                _velY[i] = 0.0f;
-                _accX[i] = 0.0f;
-                _accY[i] = 0.0f;
-                return;
-            }
-
-            float velX = _velX[i] + (accX * invMass);
-            float velY = _velY[i] + (accY * invMass);
-            velX *= _globalDamping;
-            velY *= _globalDamping;
-
-            float posX = _posX[i] + velX;
-            float posY = _posY[i] + velY;
-
-            _velX[i] = velX;
-            _velY[i] = velY;
-            _posX[i] = posX;
-            _posY[i] = posY;
-            _accX[i] = 0.0f;
-            _accY[i] = 0.0f;
-
-            float displacementX = posX - _anchorX[i];
-            float displacementY = posY - _anchorY[i];
-            if ((displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
-                (velX * velX) + (velY * velY) <= sleepSq)
-            {
-                _posX[i] = _anchorX[i];
-                _posY[i] = _anchorY[i];
-                _velX[i] = 0.0f;
-                _velY[i] = 0.0f;
+                float displacementX = posX - _anchorX[i];
+                float displacementY = posY - _anchorY[i];
+                if ((displacementX * displacementX) + (displacementY * displacementY) <= sleepSq &&
+                    (velX * velX) + (velY * velY) <= sleepSq)
+                {
+                    _posX[i] = _anchorX[i];
+                    _posY[i] = _anchorY[i];
+                    _velX[i] = 0.0f;
+                    _velY[i] = 0.0f;
+                }
             }
         });
     }
 
-    EffectorRuntime[] GatherActiveEffectors()
+    int GatherActiveEffectors()
     {
         float gridOriginX = GlobalPosition.X;
         float gridOriginY = GlobalPosition.Y;
         float gridMaxX = gridOriginX + GridSizePixels.X;
         float gridMaxY = gridOriginY + GridSizePixels.Y;
 
-        var active = new List<EffectorRuntime>();
-        foreach (Node node in GetTree().GetNodesInGroup(WarpEffector.Group))
+        var nodes = GetTree().GetNodesInGroup(WarpEffector.Group);
+        EnsureEffectorCapacity(nodes.Count);
+
+        int activeCount = 0;
+        foreach (Node node in nodes)
         {
             if (node is not WarpEffector eff || !eff.Visible)
                 continue;
 
-            WarpEffectorData data = eff.ToData(GlobalPosition, GridSizePixels);
+            WarpEffectorData data = eff.ToData(GlobalPosition);
             float globalX = eff.GlobalPosition.X;
             float globalY = eff.GlobalPosition.Y;
             float effectiveRadius = MathF.Max(data.Radius, data.AnimatedRadius + data.RingWidth);
@@ -468,104 +494,109 @@ public partial class WarpGridManager : Node2D
             if (globalY + effectiveRadius < gridOriginY || globalY - effectiveRadius > gridMaxY)
                 continue;
 
-            active.Add(new EffectorRuntime(data));
+            _effectorScratch[activeCount++] = new EffectorRuntime(data);
         }
 
-        return active.ToArray();
+        return activeCount;
     }
 
-    void ApplyEffectors(EffectorRuntime[] effectors)
+    void ApplyEffectors(int effectorCount)
     {
-        if (effectors.Length == 0)
+        if (effectorCount == 0)
             return;
 
-        Parallel.For(0, PointCount, i =>
+        ForEachPointRange((start, end) =>
         {
-            float px = _posX[i];
-            float py = _posY[i];
-            float totalX = 0.0f;
-            float totalY = 0.0f;
-
-            foreach (var effector in effectors)
+            for (int i = start; i < end; i++)
             {
-                float centerX = effector.StartX;
-                float centerY = effector.StartY;
-                if (effector.ShapeType == (uint)WarpShapeType.Line)
+                float px = _posX[i];
+                float py = _posY[i];
+                float totalX = 0.0f;
+                float totalY = 0.0f;
+
+                for (int effectorIndex = 0; effectorIndex < effectorCount; effectorIndex++)
                 {
-                    ClosestPointOnSegment(
-                        effector.StartX,
-                        effector.StartY,
-                        effector.EndX,
-                        effector.EndY,
-                        px,
-                        py,
-                        out centerX,
-                        out centerY);
-                }
+                    ref readonly EffectorRuntime effector = ref _effectorScratch[effectorIndex];
 
-                float deltaX = px - centerX;
-                float deltaY = py - centerY;
-                float distanceSq = (deltaX * deltaX) + (deltaY * deltaY);
-                float maxDistanceSq = effector.BehaviorType == WarpBehaviorType.Shockwave
-                    ? effector.EffectiveRadiusSq
-                    : effector.RadiusSq;
-                if (distanceSq > maxDistanceSq)
-                    continue;
-
-                float distance = distanceSq > SpringEpsilon ? MathF.Sqrt(distanceSq) : 0.0f;
-                float outwardX = 0.0f;
-                float outwardY = 0.0f;
-                if (distanceSq > SpringEpsilon)
-                {
-                    float invDistance = 1.0f / distance;
-                    outwardX = deltaX * invDistance;
-                    outwardY = deltaY * invDistance;
-                }
-
-                float directionX = effector.ShapeType == (uint)WarpShapeType.Radial &&
-                                   ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
-                    ? effector.DirectedX
-                    : outwardX;
-                float directionY = effector.ShapeType == (uint)WarpShapeType.Radial &&
-                                   ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
-                    ? effector.DirectedY
-                    : outwardY;
-
-                float magnitude = effector.Strength * MathF.Exp(-distanceSq / effector.SigmaDenom);
-                switch (effector.BehaviorType)
-                {
-                    case WarpBehaviorType.Impulse:
-                        magnitude *= 2.0f;
-                        break;
-                    case WarpBehaviorType.Vortex:
-                        NormalizeOrZero(-deltaY, deltaX, out directionX, out directionY);
-                        magnitude *= 1.35f;
-                        break;
-                    case WarpBehaviorType.GravityWell:
-                        directionX = -outwardX;
-                        directionY = -outwardY;
-                        magnitude *= 1.25f;
-                        break;
-                    case WarpBehaviorType.Shockwave:
+                    float centerX = effector.StartX;
+                    float centerY = effector.StartY;
+                    if (effector.ShapeType == (uint)WarpShapeType.Line)
                     {
-                        float ringDistance = MathF.Abs(distance - effector.AnimatedRadius);
-                        if (ringDistance > effector.RingWidth)
-                            continue;
-
-                        float ringFalloff = 1.0f - (ringDistance / effector.RingWidth);
-                        magnitude = effector.Strength * ringFalloff * ringFalloff;
-                        directionX = outwardX;
-                        directionY = outwardY;
-                        break;
+                        ClosestPointOnSegment(
+                            effector.StartX,
+                            effector.StartY,
+                            effector.EndX,
+                            effector.EndY,
+                            px,
+                            py,
+                            out centerX,
+                            out centerY);
                     }
+
+                    float deltaX = px - centerX;
+                    float deltaY = py - centerY;
+                    float distanceSq = (deltaX * deltaX) + (deltaY * deltaY);
+                    float maxDistanceSq = effector.BehaviorType == WarpBehaviorType.Shockwave
+                        ? effector.EffectiveRadiusSq
+                        : effector.RadiusSq;
+                    if (distanceSq > maxDistanceSq)
+                        continue;
+
+                    float distance = distanceSq > SpringEpsilon ? MathF.Sqrt(distanceSq) : 0.0f;
+                    float outwardX = 0.0f;
+                    float outwardY = 0.0f;
+                    if (distanceSq > SpringEpsilon)
+                    {
+                        float invDistance = 1.0f / distance;
+                        outwardX = deltaX * invDistance;
+                        outwardY = deltaY * invDistance;
+                    }
+
+                    float directionX = effector.ShapeType == (uint)WarpShapeType.Radial &&
+                                       ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
+                        ? effector.DirectedX
+                        : outwardX;
+                    float directionY = effector.ShapeType == (uint)WarpShapeType.Radial &&
+                                       ((effector.DirectedX * effector.DirectedX) + (effector.DirectedY * effector.DirectedY) > SpringEpsilon)
+                        ? effector.DirectedY
+                        : outwardY;
+
+                    float magnitude = effector.Strength * MathF.Exp(-distanceSq / effector.SigmaDenom);
+                    switch (effector.BehaviorType)
+                    {
+                        case WarpBehaviorType.Impulse:
+                            magnitude *= 2.0f;
+                            break;
+                        case WarpBehaviorType.Vortex:
+                            NormalizeOrZero(-deltaY, deltaX, out directionX, out directionY);
+                            magnitude *= 1.35f;
+                            break;
+                        case WarpBehaviorType.GravityWell:
+                            directionX = -outwardX;
+                            directionY = -outwardY;
+                            magnitude *= 1.25f;
+                            break;
+                        case WarpBehaviorType.Shockwave:
+                        {
+                            float ringDistance = MathF.Abs(distance - effector.AnimatedRadius);
+                            if (ringDistance > effector.RingWidth)
+                                continue;
+
+                            float ringFalloff = 1.0f - (ringDistance / effector.RingWidth);
+                            magnitude = effector.Strength * ringFalloff * ringFalloff;
+                            directionX = outwardX;
+                            directionY = outwardY;
+                            break;
+                        }
+                    }
+
+                    totalX += directionX * magnitude;
+                    totalY += directionY * magnitude;
                 }
 
-                totalX += directionX * magnitude;
-                totalY += directionY * magnitude;
+                _accX[i] = totalX;
+                _accY[i] = totalY;
             }
-
-            _accX[i] = totalX;
-            _accY[i] = totalY;
         });
     }
 
@@ -575,13 +606,23 @@ public partial class WarpGridManager : Node2D
         float restX = _physicsSpacingX;
         float restY = _physicsSpacingY;
 
-        Parallel.For(0, PointCount, i =>
+        ForEachPointRange((start, end) =>
         {
-            float totalX = _accX[i];
-            float totalY = _accY[i];
-
-            if (!(_sleeping[i] && ((_accX[i] * _accX[i]) + (_accY[i] * _accY[i]) <= sleepSq)))
+            for (int i = start; i < end; i++)
             {
+                float totalX = _accX[i];
+                float totalY = _accY[i];
+                int x = i % PhysNodesX;
+
+                if (_sleeping[i] &&
+                    ((totalX * totalX) + (totalY * totalY) <= sleepSq) &&
+                    AreNeighboringNodesSleeping(i, x))
+                {
+                    _accX[i] = totalX;
+                    _accY[i] = totalY;
+                    continue;
+                }
+
                 float anchorOffsetX = _anchorX[i] - _posX[i];
                 float anchorOffsetY = _anchorY[i] - _posY[i];
                 if ((anchorOffsetX * anchorOffsetX) + (anchorOffsetY * anchorOffsetY) > sleepSq ||
@@ -590,21 +631,19 @@ public partial class WarpGridManager : Node2D
                     totalX += (anchorOffsetX * _anchorPull) - (_velX[i] * _springDamping);
                     totalY += (anchorOffsetY * _anchorPull) - (_velY[i] * _springDamping);
                 }
+
+                if (x > 0)
+                    AddNeighborForce(i, i - 1, restX, ref totalX, ref totalY);
+                if (x + 1 < PhysNodesX)
+                    AddNeighborForce(i, i + 1, restX, ref totalX, ref totalY);
+                if (i >= PhysNodesX)
+                    AddNeighborForce(i, i - PhysNodesX, restY, ref totalX, ref totalY);
+                if (i + PhysNodesX < PointCount)
+                    AddNeighborForce(i, i + PhysNodesX, restY, ref totalX, ref totalY);
+
+                _accX[i] = totalX;
+                _accY[i] = totalY;
             }
-
-            int x = i % PhysNodesX;
-
-            if (x > 0)
-                AddNeighborForce(i, i - 1, restX, ref totalX, ref totalY);
-            if (x + 1 < PhysNodesX)
-                AddNeighborForce(i, i + 1, restX, ref totalX, ref totalY);
-            if (i >= PhysNodesX)
-                AddNeighborForce(i, i - PhysNodesX, restY, ref totalX, ref totalY);
-            if (i + PhysNodesX < PointCount)
-                AddNeighborForce(i, i + PhysNodesX, restY, ref totalX, ref totalY);
-
-            _accX[i] = totalX;
-            _accY[i] = totalY;
         });
     }
 
@@ -655,6 +694,7 @@ public partial class WarpGridManager : Node2D
             WarpGridGpuManifest.PositionImageFormat,
             _positionsScratch);
         _positionsTexture.Update(_positionsImage);
+        _positionsDirty = false;
     }
 
     int IndexOf(int x, int y) => y * PhysNodesX + x;
@@ -706,6 +746,40 @@ public partial class WarpGridManager : Node2D
         float invLength = 1.0f / MathF.Sqrt(lengthSq);
         nx = x * invLength;
         ny = y * invLength;
+    }
+
+    void ForEachPointRange(Action<int, int> action)
+    {
+        Parallel.ForEach(_pointRanges, range => action(range.Item1, range.Item2));
+    }
+
+    void EnsureEffectorCapacity(int requiredCapacity)
+    {
+        if (_effectorScratch.Length >= requiredCapacity)
+            return;
+
+        _effectorScratch = new EffectorRuntime[Math.Max(requiredCapacity, 4)];
+    }
+
+    bool AreNeighboringNodesSleeping(int index, int x)
+    {
+        if (x > 0 && !_sleeping[index - 1])
+            return false;
+        if (x + 1 < PhysNodesX && !_sleeping[index + 1])
+            return false;
+        if (index >= PhysNodesX && !_sleeping[index - PhysNodesX])
+            return false;
+        if (index + PhysNodesX < PointCount && !_sleeping[index + PhysNodesX])
+            return false;
+        return true;
+    }
+
+    static int ComputeBatchSize(int pointCount)
+    {
+        int workerCount = Math.Max(Environment.ProcessorCount, 1);
+        int targetChunks = workerCount * 4;
+        int chunkSize = Math.Max(pointCount / Math.Max(targetChunks, 1), 64);
+        return Math.Min(pointCount, chunkSize);
     }
 
     void VerifyTextureManifest()

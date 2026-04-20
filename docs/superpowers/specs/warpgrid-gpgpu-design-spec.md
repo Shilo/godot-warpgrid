@@ -1,5 +1,7 @@
 # WarpGrid GPGPU — Design Specification
 
+> Historical note: this document describes the retired compute-shader prototype from the `gpu-wave-equation` era. The active implementation in this repository is now the CPU-driven SoA mass-spring solver documented in `README.md`, with the GPU used only for bilinear display interpolation and shading.
+
 **Status:** Phase 5.1 shipped. See §15 (Phase 4 changelog + Phase 5 / 5.1 addendum with cell-count transition), §16 (`std140` UBO 64 B reference), §17 (`RestState` SSBO softness-map reference). Plans: `../plans/2026-04-18-warpgrid-phase4.md`, `../plans/2026-04-18-warpgrid-gpgpu-prototype.md`.
 **Target:** Godot 4.6.2-mono, Windows d3d12, Mobile renderer.
 **Authors:** Shilo + Claude (Opus 4.7).

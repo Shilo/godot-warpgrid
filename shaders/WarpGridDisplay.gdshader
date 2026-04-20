@@ -9,12 +9,13 @@ render_mode unshaded;
 uniform sampler2D positions_tex : filter_linear;
 uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid_size_pixels;
-uniform ivec2 grid_dims;
+uniform ivec2 display_grid_dims;
 // Physics texture dimensions in texels (node count, e.g. 37x21 for a 36x20 phys grid).
 // Used to offset UV sampling to texel centers for exact endpoint alignment.
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
+uniform float physics_min_spacing = 32.0;
 uniform vec4 line_color : source_color = vec4(0.1, 1.0, 1.0, 1.0);
-uniform float glow_gain : hint_range(0.0, 5.0) = 0.1;
+uniform float glow_gain : hint_range(0.0, 5.0) = 1.0;
 
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).
 uniform int display_mode = 0;
@@ -22,15 +23,23 @@ uniform int display_mode = 0;
 varying float v_energy;
 varying vec2 v_warp;
 
+vec4 sample_positions(vec2 uv) {
+	vec2 sample_uv = (uv * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;
+	return texture(positions_tex, sample_uv);
+}
+
+float normalized_energy(vec2 warp) {
+	return length(warp) / max(physics_min_spacing, 1.0);
+}
+
 void vertex() {
 	// Mesh vertices are laid out on the rest grid, so the rendered warp is the delta
 	// between the current sampled position and its anchor.
-	vec2 sample_uv = (UV * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;
-	vec4 packed = texture(positions_tex, sample_uv);
+	vec4 packed = sample_positions(UV);
 	vec2 position = packed.xy;
 	vec2 anchor = packed.zw;
 	v_warp = position - anchor;
-	v_energy = length(v_warp);
+	v_energy = normalized_energy(v_warp);
 	VERTEX += v_warp;
 }
 
@@ -59,20 +68,23 @@ float grid_line_mask(vec2 uv, vec2 cells, float taper) {
 }
 
 void fragment() {
-	float glow = smoothstep(0.0, 1.0, v_energy * glow_gain);
-	vec2 aberr_dir = (length(v_warp) > 1e-5) ? normalize(v_warp) : vec2(1.0, 0.0);
-	float aberr = clamp(v_energy * 0.0025, 0.0, 1.0);
+	vec4 packed = sample_positions(UV);
+	vec2 frag_warp = packed.xy - packed.zw;
+	float energy = max(v_energy, normalized_energy(frag_warp));
+	float glow = smoothstep(0.0, 1.0, energy * glow_gain);
+	vec2 aberr_dir = (length(frag_warp) > 1e-5) ? normalize(frag_warp) : vec2(1.0, 0.0);
+	float aberr = clamp(energy * 0.08, 0.0, 1.0);
 
 	if (display_mode == 1) {
 		// Texture mode — sample the sprite, tint it lightly, and add subtle energy glow.
-		vec4 tex_col = apply_chromatic_aberration(main_tex, UV, aberr_dir, v_energy, 1.0);
+		vec4 tex_col = apply_chromatic_aberration(main_tex, UV, aberr_dir, energy, 1.0);
 		vec4 base = tex_col * line_color;
 		vec4 bright = base * 1.55;
 		bright.a = base.a;
 		COLOR = mix(base, bright, glow);
 	} else {
-		vec2 cells = vec2(grid_dims);
-		float taper = mix(1.0, 0.55, smoothstep(0.0, 24.0, v_energy));
+		vec2 cells = vec2(display_grid_dims);
+		float taper = mix(1.0, 0.55, smoothstep(0.0, 0.75, energy));
 		float line_mask_r = grid_line_mask(UV + aberr_dir * aberr * 0.6, cells, taper);
 		float line_mask_g = grid_line_mask(UV, cells, taper);
 		float line_mask_b = grid_line_mask(UV - aberr_dir * aberr * 0.6, cells, taper);

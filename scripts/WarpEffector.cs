@@ -29,11 +29,10 @@ public partial class WarpEffector : Node2D
         if (IsInGroup(Group)) RemoveFromGroup(Group);
     }
 
-    public WarpEffectorData ToData(Vector2 gridOrigin, Vector2 gridSizePixels)
+    public WarpEffectorData ToData(Vector2 gridOrigin)
     {
         // CPU mass-spring input: keep the effector in pixel space so the solver can
         // consume the same coordinates the scene uses for placement.
-        _ = gridSizePixels;
         var startPx = GlobalPosition - gridOrigin;
         var endPx = startPx + EndOffset;
         float ageSeconds = (float)(Time.GetTicksMsec() / 1000.0 - _spawnTimeSeconds);

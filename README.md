@@ -7,7 +7,7 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 ## Architecture
 
 - `scripts/WarpGridManager.cs`
-  CPU simulation, flat SoA state buffers (`_posX/_posY`, `_velX/_velY`, `_accX/_accY`, `_anchorX/_anchorY`), direct-index spring evaluation, texture packing, and mesh/material setup.
+  CPU simulation, flat SoA state buffers (`_posX/_posY`, `_velX/_velY`, `_accX/_accY`, `_anchorX/_anchorY`), batched parallel spring/effectors/integration passes, texture packing, and mesh/material setup.
 - `scripts/WarpEffector.cs`
   Pixel-space radial or directional force input.
 - `scripts/WarpMouseController.cs`
@@ -22,6 +22,7 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 - Physics lattice: `PhysicsGridW x PhysicsGridH` cells, with one anchor spring per node and cardinal springs across the grid.
 - Visual mesh: `GridW x GridH` cells, sampled against the lower-resolution positions texture.
 - Integration: semi-implicit Euler, stepped through a fixed `1.0 / 120.0` accumulator inside `_PhysicsProcess`.
+- Scheduling: the solver uses batched `Parallel.ForEach` range partitioning so large grids spread cleanly across CPU cores.
 - Boundary guard: perimeter nodes hard-pin to anchor when `ClampEdges` is enabled.
 - Sleep guard: nodes snap fully to rest once displacement and velocity fall below `1e-4`.
 
@@ -57,4 +58,5 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 
 - The solver is intentionally CPU-side now; there is no compute-shader physics dispatch loop.
 - The shader expects the positions texture contract described in `WarpGridGpuManifest.cs`.
+- Grid-mode line density follows the display mesh, while warp deformation still comes from the lower-resolution physics texture.
 - No automated tests are included for this refactor by design.

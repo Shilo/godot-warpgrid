@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Godot;
 
 namespace WarpGrid;
@@ -13,7 +12,6 @@ public enum WarpBehaviorType : uint
     Shockwave = 4,
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct WarpEffectorData
 {
     public Vector2 StartPoint;
