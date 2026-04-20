@@ -22,7 +22,7 @@ layout(set = 0, binding = 1, std430) buffer WriteSt  { NodeState data[]; } r_out
 layout(set = 0, binding = 2, std430) restrict readonly  buffer RestBuf  { RestState data[]; } r_rest;
 layout(set = 0, binding = 3, std430) restrict readonly  buffer EffBuf   { WarpEffectorData data[]; } r_eff;
 
-// 48-byte UBO, std140. Wave model parameters.
+// 48-byte UBO, std140. anchor_stiffness reuses the former padding slot at offset 40.
 layout(set = 0, binding = 4, std140) uniform GridParams {
     uvec2 grid_size;         // offset 0
     vec2  grid_spacing;      // offset 8
@@ -32,7 +32,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     float dir_decay;         // offset 28 — direction magnitude persistence per step
     uint  effector_count;    // offset 32
     float force_scaler;      // offset 36 — 1/SubSteps so per-engine-tick energy is invariant
-    float _pad1;             // offset 40
+    float anchor_stiffness;  // offset 40 — independent pull toward h=0 for localized ripples
     float _pad2;             // offset 44
 } p;
 
@@ -76,10 +76,11 @@ void main() {
     float h_avg  = (nl.h_curr + nr.h_curr + nu.h_curr + nd.h_curr) * 0.25;
     vec2  d_sum  = nl.dir + nr.dir + nu.dir + nd.dir;
 
-    // Discrete 2D wave equation (leapfrog form):
-    //   h_next = 2h - h_prev + tension * (h_avg - h)
+    // Discrete 2D wave equation (leapfrog form) with restoring anchor force:
+    //   h_next = 2h - h_prev + tension * (h_avg - h) + (0 - h) * anchor_stiffness
     // Tension = wave speed^2; stable while tension * 4 < 2 (CFL for 4-neighbor Laplacian).
-    float h_next = 2.0 * me.h_curr - me.h_prev + p.tension * (h_avg - me.h_curr);
+    float anchor_pull = (0.0 - me.h_curr) * p.anchor_stiffness;
+    float h_next = 2.0 * me.h_curr - me.h_prev + p.tension * (h_avg - me.h_curr) + anchor_pull;
     h_next *= p.damping;
 
     // Fringe damping: stronger decay in a 3-cell sponge so waves dissolve instead of reflect.
@@ -144,7 +145,7 @@ void main() {
         }
     }
 
-    // Jitter guard — kill sub-pixel noise so the grid actually settles.
+    // Jitter guard — kill sub-pixel noise so the grid settles back to a dead calm.
     if (abs(h_next) < 1e-2) {
         h_next  = 0.0;
         new_dir = vec2(0.0);

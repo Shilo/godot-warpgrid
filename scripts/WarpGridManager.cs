@@ -69,13 +69,15 @@ public partial class WarpGridManager : Node2D
     int VisualNodesY => _gridH + 1;
 
     // Phase 13 — Discrete 2D Wave Equation. Scalar height field propagated by Laplacian
-    // averaging; inherently stable under parallel GPU update (no force pulls = no checker-
-    // board). Tension is wave-speed^2 (CFL: keep tension * 4 < 2). Damping is the global
-    // per-step height decay. EdgeDamp thickens energy absorption in the 3-cell fringe.
+    // averaging plus a per-node restoring pull back toward h=0, which keeps ripples local
+    // instead of turning the whole sheet into one global jiggle. Tension is wave-speed^2
+    // (CFL: keep tension * 4 < 2). Damping is the global per-step height decay. EdgeDamp
+    // thickens energy absorption in the 3-cell fringe.
     //
     // Properties (not fields) so Inspector edits in the editor push a fresh UBO on the same
     // frame — otherwise the kernel would keep running with the stale params buffer.
-    float _tension  = 0.35f;
+    float _tension  = 0.08f;
+    float _anchorStiffness = 0.05f;
     float _damping  = 0.98f;
     float _edgeDamp = 0.85f;
     float _dirDecay = 0.995f;
@@ -84,6 +86,11 @@ public partial class WarpGridManager : Node2D
     {
         get => _tension;
         set { if (_tension == value) return; _tension = value; MaybeUploadParams(); }
+    }
+    [Export] public float AnchorStiffness
+    {
+        get => _anchorStiffness;
+        set { if (_anchorStiffness == value) return; _anchorStiffness = value; MaybeUploadParams(); }
     }
     [Export] public float Damping
     {
@@ -114,17 +121,27 @@ public partial class WarpGridManager : Node2D
             Rebuild();
         }
     }
-    // Phase 13 — wave eq propagates 1 cell / iteration, so SubSteps directly scales ripple
-    // speed. 2 is enough at 36×20; raise for faster wavefronts.
-    [Export] public int SubSteps = 2;
+    // Phase 13 — lower tension makes the traveling front easier to read, so SubSteps rises
+    // to preserve a smooth curve without changing per-engine-tick input energy.
+    int _subSteps = 4;
+    [Export] public int SubSteps
+    {
+        get => _subSteps;
+        set
+        {
+            int clamped = Math.Max(1, value);
+            if (_subSteps == clamped) return;
+            _subSteps = clamped;
+            MaybeUploadParams();
+        }
+    }
     const int   MaxEffectors = 128;
 
     const int StateStride = 16;
     const int RestStride  = 16; // v5: vec2 anchor + float weight + float _pad (std430 stride)
     const int EffStride   = 32;
-    // Phase 10: UBO shrunk to 48 bytes after dropping dt/impulse_cap/falloff_scale/grid_aspect.
-    // 48 is already 16-byte aligned, no std140 padding needed.
-    const int ParamSize   = 48;
+    // GridParams stays 48 bytes: anchor_stiffness now occupies the former _pad1 slot at offset 40.
+    const int ParamSize   = WarpGridGpuManifest.ParamSize;
     const int LocalSize   = 8; // Must match layout(local_size_x/y = 8) in WarpGrid.glsl
 
     RenderingDevice _rd;
@@ -201,6 +218,7 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
+        VerifyGpuManifest();
         var shaderFile = GD.Load<RDShaderFile>("res://shaders/WarpGrid.glsl");
         var spirv = shaderFile.GetSpirV();
         _shader = _rd.ShaderCreateFromSpirV(spirv);
@@ -363,22 +381,21 @@ public partial class WarpGridManager : Node2D
     void UploadParams()
     {
         // std140 UBO layout — order-critical, must match GridParams in WarpGrid.glsl.
-        // Phase 13 wave-model block, 48 bytes.
-        Array.Clear(_paramScratch, 0, _paramScratch.Length);
-        using var ms = new MemoryStream(_paramScratch);
-        using var bw = new BinaryWriter(ms);
-        bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);   // grid_size    @ 0
-        float sx = GridSizePixels.X / PhysGridW;                  // grid_spacing @ 8 (pixels)
+        float sx = GridSizePixels.X / PhysGridW; // grid_spacing @ 8 (pixels)
         float sy = GridSizePixels.Y / PhysGridH;
-        bw.Write(sx); bw.Write(sy);
-        bw.Write(_tension);                                       // tension      @ 16
-        bw.Write(_damping);                                       // damping      @ 20
-        bw.Write(_edgeDamp);                                      // edge_damp    @ 24
-        bw.Write(_dirDecay);                                      // dir_decay    @ 28
-        bw.Write(_effCount);                                      // effector_count @ 32
-        bw.Write(1.0f / SubSteps);                                // force_scaler @ 36
-        bw.Write(0.0f);                                           // _pad1        @ 40
-        bw.Write(0.0f);                                           // _pad2        @ 44
+        byte[] packed = WarpGridGpuManifest.PackGridParams(new WarpGridGpuManifest.GridParamsData(
+            GridSizeX: (uint)PhysNodesX,
+            GridSizeY: (uint)PhysNodesY,
+            GridSpacingX: sx,
+            GridSpacingY: sy,
+            Tension: _tension,
+            Damping: _damping,
+            EdgeDamp: _edgeDamp,
+            DirDecay: _dirDecay,
+            EffectorCount: _effCount,
+            ForceScaler: 1.0f / SubSteps,
+            AnchorStiffness: _anchorStiffness));
+        Buffer.BlockCopy(packed, 0, _paramScratch, 0, ParamSize);
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
 
@@ -441,6 +458,13 @@ public partial class WarpGridManager : Node2D
         // Hot-reload physics knobs from the Inspector. No-op when GPU isn't up yet — the
         // next _Ready or Rebuild will pick up the field values on its first UploadParams.
         if (_rd != null) UploadParams();
+    }
+
+    static void VerifyGpuManifest()
+    {
+        string shaderPath = ProjectSettings.GlobalizePath("res://shaders/WarpGrid.glsl");
+        string shaderSource = File.ReadAllText(shaderPath);
+        WarpGridGpuManifest.VerifyGridParamsManifest(shaderSource);
     }
 
     void TeardownGpu()

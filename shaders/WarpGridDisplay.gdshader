@@ -12,8 +12,7 @@ uniform ivec2 grid_dims;
 uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 // Phase 11 Task 4 — neon cyan. Bright, saturated, arcade-loud.
 uniform vec4 line_color : source_color = vec4(0.1, 1.0, 1.0, 1.0);
-// Phase 13 — glow_gain now multiplies scalar height (pixels), not velocity. Default 0.1
-// keeps h=10 px at ~full glow; raise for louder neon, lower for subtler response.
+// Phase 13 — glow_gain now controls how strongly peaks above the highlight threshold bloom.
 uniform float glow_gain : hint_range(0.0, 5.0) = 0.1;
 
 // Phase 6.1: mutually exclusive render modes.
@@ -37,8 +36,8 @@ void vertex() {
 }
 
 void fragment() {
-	// Phase 6.2 — smoothstep-mapped glow: soft ramp to saturation, no harsh knee.
-	float glow = smoothstep(0.0, 1.0, v_speed * glow_gain);
+	// Suppress the background glow until a ripple reaches a visible crest.
+	float glow = smoothstep(0.0, 1.0, max(v_speed - 2.0, 0.0) * glow_gain);
 
 	if (display_mode == 1) {
 		// Texture mode — pure sprite warp. line_color tints the sampled color.
@@ -58,9 +57,9 @@ void fragment() {
 		float edge = min(f.x, 1.0 - f.x);
 		float edge_y = min(f.y, 1.0 - f.y);
 
-		// Phase 13 — taper scales with height magnitude (pixels). 0.03 px⁻¹ with a 0.7 ceiling
-		// thins lines on large ripples but leaves plenty of line width at rest.
-		float taper = 1.0 - clamp(v_speed * 0.03, 0.0, 0.7);
+		// Thin the line specifically at the wave crest so the peak reads like a taut water skin.
+		float peak = smoothstep(2.0, 8.0, v_speed);
+		float taper = mix(1.0, 0.35, peak);
 
 		float core_x = 1.0 - smoothstep(0.0, df.x * 2.0 * taper, edge);
 		float core_y = 1.0 - smoothstep(0.0, df.y * 2.0 * taper, edge_y);
