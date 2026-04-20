@@ -116,7 +116,7 @@ public partial class WarpGridManager : Node2D
     }
     // Phase 13 — wave eq propagates 1 cell / iteration, so SubSteps directly scales ripple
     // speed. 2 is enough at 36×20; raise for faster wavefronts.
-    const int   SubSteps     = 2;
+    [Export] public int SubSteps = 2;
     const int   MaxEffectors = 128;
 
     const int StateStride = 16;
