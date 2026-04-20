@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Godot;
@@ -6,6 +7,7 @@ using Godot;
 namespace WarpGrid;
 
 public enum WarpRenderMode { Grid = 0, Texture = 1 }
+public enum VibePreset { Classic = 0, Arcade = 1, Heavy = 2, Ghost = 3 }
 
 [GlobalClass, Tool]
 public partial class WarpGridManager : Node2D
@@ -14,6 +16,7 @@ public partial class WarpGridManager : Node2D
     int _gridH = 100;
     Vector2 _gridSizePixels = new(1152, 648);
 
+    [ExportGroup("Grid")]
     [Export] public int GridW
     {
         get => _gridW;
@@ -32,6 +35,7 @@ public partial class WarpGridManager : Node2D
         set { if (_gridSizePixels == value) return; _gridSizePixels = value; MaybeRebuild(); }
     }
 
+    [ExportGroup("Display")]
     [Export] public Color LineColor = new(0.15f, 0.55f, 1.0f);
     [Export] public Texture2D MainTexture;
 
@@ -55,13 +59,20 @@ public partial class WarpGridManager : Node2D
     int VisualNodesY => _gridH + 1;
 
     int _subSteps = 2;
-    int _solverIterations = 3;
-    float _neighborStiffness = 0.5f;
-    float _anchorStiffness = 0.35f;
-    float _globalDamping = 0.98f;
-    float _friction = 0.05f;
+    int _solverIterations = 4;
+    float _neighborStiffness = 0.74f;
+    float _anchorStiffness = 0.70f;
+    float _globalDamping = 0.90f;
+    float _friction = 0.34f;
     bool _boundaryPinning = true;
+    float _chromaticStrength = 1.0f;
+    float _spiralFactor = 0.72f;
+    float _persistence = 0.10f;
+    float _motionBlurStrength = 0.20f;
+    float _stretchTaperStrength = 1.0f;
+    global::WarpGrid.VibePreset _vibePreset = global::WarpGrid.VibePreset.Arcade;
 
+    [ExportGroup("Physics (PBD)")]
     [Export] public int SubSteps
     {
         get => _subSteps;
@@ -118,6 +129,73 @@ public partial class WarpGridManager : Node2D
         set { if (_boundaryPinning == value) return; _boundaryPinning = value; MaybeUploadParams(); }
     }
 
+    [ExportGroup("Visuals")]
+    [Export] public float ChromaticStrength
+    {
+        get => _chromaticStrength;
+        set
+        {
+            if (Mathf.IsEqualApprox(_chromaticStrength, value)) return;
+            _chromaticStrength = value;
+            if (_material != null)
+                _material.SetShaderParameter("chromatic_strength", _chromaticStrength);
+        }
+    }
+
+    [Export] public float Persistence
+    {
+        get => _persistence;
+        set
+        {
+            if (Mathf.IsEqualApprox(_persistence, value)) return;
+            _persistence = value;
+            if (_material != null)
+                _material.SetShaderParameter("persistence", _persistence);
+        }
+    }
+
+    [Export] public float MotionBlurStrength
+    {
+        get => _motionBlurStrength;
+        set
+        {
+            if (Mathf.IsEqualApprox(_motionBlurStrength, value)) return;
+            _motionBlurStrength = value;
+            if (_material != null)
+                _material.SetShaderParameter("motion_blur_strength", _motionBlurStrength);
+        }
+    }
+
+    [Export] public float StretchTaperStrength
+    {
+        get => _stretchTaperStrength;
+        set
+        {
+            if (Mathf.IsEqualApprox(_stretchTaperStrength, value)) return;
+            _stretchTaperStrength = value;
+            if (_material != null)
+                _material.SetShaderParameter("stretch_taper_strength", _stretchTaperStrength);
+        }
+    }
+
+    [Export] public float SpiralFactor
+    {
+        get => _spiralFactor;
+        set { if (Mathf.IsEqualApprox(_spiralFactor, value)) return; _spiralFactor = value; MaybeUploadParams(); }
+    }
+
+    [Export] public global::WarpGrid.VibePreset VibePreset
+    {
+        get => _vibePreset;
+        set
+        {
+            if (_vibePreset == value) return;
+            _vibePreset = value;
+            ApplyPreset(value);
+        }
+    }
+
+    [ExportGroup("Tools")]
     [Export] public bool ForceRebuild
     {
         get => false;
@@ -135,6 +213,7 @@ public partial class WarpGridManager : Node2D
     const int EffStride = 32;
     const int ParamSize = 64;
     const int LocalSize = 8;
+    const int SpiralFactorOffset = 52;
 
     RenderingDevice _rd;
     Rid _shader, _pipeline;
@@ -162,6 +241,7 @@ public partial class WarpGridManager : Node2D
         if (GridW < 1 || GridH < 1)
             throw new Exception($"WarpGridManager: GridW/GridH must be >= 1 cell (got {GridW}x{GridH}).");
 
+        VerifyGpuManifest();
         RefreshDispatchPlan();
         BuildMesh();
         InitGpu();
@@ -300,6 +380,10 @@ public partial class WarpGridManager : Node2D
         _material.SetShaderParameter("phys_tex_size", new Vector2(PhysNodesX, PhysNodesY));
         _material.SetShaderParameter("line_color", LineColor);
         _material.SetShaderParameter("display_mode", (int)_renderMode);
+        _material.SetShaderParameter("chromatic_strength", _chromaticStrength);
+        _material.SetShaderParameter("persistence", _persistence);
+        _material.SetShaderParameter("motion_blur_strength", _motionBlurStrength);
+        _material.SetShaderParameter("stretch_taper_strength", _stretchTaperStrength);
         if (MainTexture != null)
             _material.SetShaderParameter("main_tex", MainTexture);
 
@@ -382,7 +466,7 @@ public partial class WarpGridManager : Node2D
         bw.Write((uint)phase.Kind);
         bw.Write(phase.ApplyEffectors ? 1u : 0u);
         bw.Write(_boundaryPinning ? 1u : 0u);
-        bw.Write(0.0f);
+        bw.Write(Mathf.Clamp(_spiralFactor, 0.0f, 1.0f));
 
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
@@ -399,6 +483,120 @@ public partial class WarpGridManager : Node2D
         _rd.ComputeListDispatch(list, gx, gy, 1);
         _rd.ComputeListAddBarrier(list);
         _rd.ComputeListEnd();
+    }
+
+    void ApplyPreset(global::WarpGrid.VibePreset preset)
+    {
+        switch (preset)
+        {
+            case global::WarpGrid.VibePreset.Classic:
+                SubSteps = 2;
+                SolverIterations = 2;
+                NeighborStiffness = 0.22f;
+                AnchorStiffness = 0.10f;
+                GlobalDamping = 0.992f;
+                Friction = 0.06f;
+                SpiralFactor = 0.35f;
+                BoundaryPinning = false;
+                break;
+            case global::WarpGrid.VibePreset.Arcade:
+                SubSteps = 2;
+                SolverIterations = 4;
+                NeighborStiffness = 0.74f;
+                AnchorStiffness = 0.70f;
+                GlobalDamping = 0.90f;
+                Friction = 0.34f;
+                SpiralFactor = 0.72f;
+                BoundaryPinning = true;
+                break;
+            case global::WarpGrid.VibePreset.Heavy:
+                SubSteps = 2;
+                SolverIterations = 4;
+                NeighborStiffness = 0.58f;
+                AnchorStiffness = 0.42f;
+                GlobalDamping = 0.78f;
+                Friction = 0.48f;
+                SpiralFactor = 0.50f;
+                BoundaryPinning = true;
+                break;
+            case global::WarpGrid.VibePreset.Ghost:
+                SubSteps = 3;
+                SolverIterations = 2;
+                NeighborStiffness = 0.34f;
+                AnchorStiffness = 0.08f;
+                GlobalDamping = 0.998f;
+                Friction = 0.0f;
+                SpiralFactor = 0.88f;
+                BoundaryPinning = true;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unknown vibe preset.");
+        }
+    }
+
+    void VerifyGpuManifest()
+    {
+        string shaderPath = ProjectSettings.GlobalizePath("res://shaders/WarpGrid.glsl");
+        if (!File.Exists(shaderPath))
+        {
+            string missingMessage = $"WarpGridManager: compute shader manifest file not found at '{shaderPath}'.";
+            GD.PushError(missingMessage);
+            throw new Exception(missingMessage);
+        }
+
+        string source = File.ReadAllText(shaderPath);
+        const string prefix = "// GPU_MANIFEST ";
+        int start = source.IndexOf(prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            string missingManifest = "WarpGridManager: missing GPU_MANIFEST line in shaders/WarpGrid.glsl.";
+            GD.PushError(missingManifest);
+            throw new Exception(missingManifest);
+        }
+
+        int end = source.IndexOf('\n', start);
+        string manifestLine = end >= 0
+            ? source.Substring(start + prefix.Length, end - start - prefix.Length).Trim()
+            : source[(start + prefix.Length)..].Trim();
+
+        var manifestValues = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (string pair in manifestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string[] kv = pair.Split('=', 2, StringSplitOptions.TrimEntries);
+            if (kv.Length != 2 || !int.TryParse(kv[1], out int parsed))
+                continue;
+            manifestValues[kv[0]] = parsed;
+        }
+
+        ValidateManifestValue(manifestValues, "STATE_STRIDE", StateStride);
+        ValidateManifestValue(manifestValues, "REST_STRIDE", RestStride);
+        ValidateManifestValue(manifestValues, "EFF_STRIDE", EffStride);
+        ValidateManifestValue(manifestValues, "PARAM_SIZE", ParamSize);
+        ValidateManifestValue(manifestValues, "SPIRAL_FACTOR_OFFSET", SpiralFactorOffset);
+
+        if (!source.Contains("float spiral_factor;", StringComparison.Ordinal))
+        {
+            string missingSpiral = "WarpGridManager: GLSL manifest is present, but GridParams is missing 'spiral_factor'.";
+            GD.PushError(missingSpiral);
+            throw new Exception(missingSpiral);
+        }
+    }
+
+    void ValidateManifestValue(Dictionary<string, int> manifestValues, string key, int actualValue)
+    {
+        if (!manifestValues.TryGetValue(key, out int expectedValue))
+        {
+            string missingKey = $"WarpGridManager: GPU manifest missing '{key}' in shaders/WarpGrid.glsl.";
+            GD.PushError(missingKey);
+            throw new Exception(missingKey);
+        }
+
+        if (expectedValue == actualValue)
+            return;
+
+        string mismatch = $"WarpGridManager: GPU manifest mismatch for {key}. C#={actualValue}, GLSL={expectedValue}. Refusing to initialize mismatched buffers.";
+        GD.PushError(mismatch);
+        throw new Exception(mismatch);
     }
 
     protected virtual float RestAnchorWeight(int x, int y) => 1.0f;

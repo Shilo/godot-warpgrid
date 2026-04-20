@@ -1,5 +1,6 @@
 #[compute]
 #version 450
+// GPU_MANIFEST STATE_STRIDE=16 REST_STRIDE=16 EFF_STRIDE=32 PARAM_SIZE=64 SPIRAL_FACTOR_OFFSET=52
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -31,7 +32,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     uint  phase_kind;           // 40
     uint  apply_effectors;      // 44
     uint  boundary_pinning;     // 48
-    float _pad0;                // 52
+    float spiral_factor;        // 52
 } p;
 
 layout(set = 0, binding = 5, rgba32f) uniform restrict writeonly image2D positions_tex;
@@ -67,25 +68,33 @@ vec2 effector_offset(vec2 sample_pos) {
         float d2 = dot(d_raw, d_raw);
         if (d2 > ed.radius * ed.radius) continue;
 
+        float len = length(d_raw);
+        vec2 radial_dir = (len > 1e-6) ? (d_raw / len) : vec2(0.0);
+        vec2 inward_dir = -radial_dir;
+        vec2 push_dir = radial_dir;
+
         float sigma = max(ed.radius, 1e-4) * 0.5;
         float amp = ed.strength * exp(-d2 / (2.0 * sigma * sigma)) * p.force_scaler;
 
-        vec2 push_dir = vec2(0.0);
-        if (ed.shape_type == 0u) {
+        if (ed.behavior_type == 2u) {
+            vec2 tangent = vec2(-radial_dir.y, radial_dir.x);
+            vec2 spiral_dir = mix(inward_dir, tangent, clamp(p.spiral_factor, 0.0, 1.0));
+            float spiral_len = length(spiral_dir);
+            push_dir = (spiral_len > 1e-6) ? (spiral_dir / spiral_len) : tangent;
+        } else if (ed.behavior_type == 3u) {
+            float damped_inv_sq = (ed.radius * ed.radius) / max(d2 + sigma * sigma, 1e-4);
+            offset += inward_dir * (ed.strength * p.force_scaler * damped_inv_sq * 0.18);
+            continue;
+        } else if (ed.shape_type == 0u) {
             vec2 dv = ed.end_point - ed.start_point;
-            if (dot(dv, dv) > 1e-10) {
+            if (dot(dv, dv) > 1e-10)
                 push_dir = normalize(dv);
-            } else {
-                float len = length(d_raw);
-                if (len > 1e-6) push_dir = d_raw / len;
-            }
-        } else {
-            float len = length(d_raw);
-            if (len > 1e-6) push_dir = d_raw / len;
         }
 
         if (ed.behavior_type == 1u)
             amp *= 1.5;
+        else if (ed.behavior_type == 2u)
+            amp *= 1.15;
 
         offset += push_dir * amp;
     }
