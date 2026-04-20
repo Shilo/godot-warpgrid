@@ -31,7 +31,7 @@ layout(set = 0, binding = 4, std140) uniform GridParams {
     float edge_damp;         // offset 24 — sponge multiplier applied to a 3-cell fringe
     float dir_decay;         // offset 28 — direction magnitude persistence per step
     uint  effector_count;    // offset 32
-    float _pad0;             // offset 36
+    float force_scaler;      // offset 36 — 1/SubSteps so per-engine-tick energy is invariant
     float _pad1;             // offset 40
     float _pad2;             // offset 44
 } p;
@@ -108,7 +108,10 @@ void main() {
         if (d2 > ed.radius * ed.radius) continue;
 
         float sigma = max(ed.radius, 1e-4) * 0.5;
-        float gauss = exp(-d2 / (2.0 * sigma * sigma));
+        // Delta-scale: force_scaler = 1/SubSteps keeps total per-engine-tick energy
+        // constant whether the kernel dispatches 2× or 8× per physics frame. Without
+        // this, stationary effectors pump N× strength per tick and blow the field out.
+        float gauss = exp(-d2 / (2.0 * sigma * sigma)) * p.force_scaler;
         float amp   = ed.strength * gauss;
 
         // Push direction: Radial-Directed uses start→end; others radiate out from center.

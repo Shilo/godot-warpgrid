@@ -13,6 +13,10 @@ public partial class WarpMouseController : Node2D
     // so tuning Tension/Damping doesn't require entering Play mode. Tick off if the constant
     // ripple is distracting.
     [Export] public bool  EditorPreview   = true;
+    // Editor input is typically "held-static" (user parks the cursor and holds Ctrl while
+    // tweaking the Inspector) which pumps energy every tick. Scale the modifier force down
+    // so the wave field doesn't saturate before the user lets go.
+    [Export] public float EditorForceMultiplier = 0.2f;
 
     private WarpEffector _effector;
     private bool _triggerImpulse = false;
@@ -56,8 +60,9 @@ public partial class WarpMouseController : Node2D
         {
             bool ctrl  = Input.IsKeyPressed(Key.Ctrl);
             bool shift = Input.IsKeyPressed(Key.Shift);
-            if (ctrl && shift)      ApplyEffectorState(-ForceStrength, WarpBehaviorType.Force);
-            else if (ctrl)          ApplyEffectorState( ForceStrength, WarpBehaviorType.Force);
+            float editorStrength = ForceStrength * EditorForceMultiplier;
+            if (ctrl && shift)      ApplyEffectorState(-editorStrength, WarpBehaviorType.Force);
+            else if (ctrl)          ApplyEffectorState( editorStrength, WarpBehaviorType.Force);
             // Hover preview stays visible + tracks the cursor at zero strength. Holding a
             // modifier is the ONLY way to pump energy into the grid — otherwise each tick
             // would add ForceStrength and blow the wave field out to saturation.

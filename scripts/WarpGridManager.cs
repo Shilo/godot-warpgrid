@@ -376,7 +376,7 @@ public partial class WarpGridManager : Node2D
         bw.Write(_edgeDamp);                                      // edge_damp    @ 24
         bw.Write(_dirDecay);                                      // dir_decay    @ 28
         bw.Write(_effCount);                                      // effector_count @ 32
-        bw.Write(0.0f);                                           // _pad0        @ 36
+        bw.Write(1.0f / SubSteps);                                // force_scaler @ 36
         bw.Write(0.0f);                                           // _pad1        @ 40
         bw.Write(0.0f);                                           // _pad2        @ 44
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
