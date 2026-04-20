@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Threading.Tasks;
 using Godot;
 using SimVector2 = System.Numerics.Vector2;
 
@@ -172,10 +172,43 @@ public partial class WarpGridManager : Node2D
     ImageTexture _positionsTexture;
 
     WarpGridPoint[] _points = Array.Empty<WarpGridPoint>();
-    WarpGridSpring[] _springs = Array.Empty<WarpGridSpring>();
     bool[] _edgeMask = Array.Empty<bool>();
     bool[] _sleeping = Array.Empty<bool>();
+    SimVector2[] _springForces = Array.Empty<SimVector2>();
+    SimVector2[] _effectorForces = Array.Empty<SimVector2>();
     byte[] _positionsScratch = Array.Empty<byte>();
+
+    readonly struct EffectorRuntime
+    {
+        public readonly SimVector2 Start;
+        public readonly SimVector2 End;
+        public readonly SimVector2 DirectedUnit;
+        public readonly float RadiusSq;
+        public readonly float SigmaDenom;
+        public readonly float Strength;
+        public readonly float AnimatedRadius;
+        public readonly float RingWidth;
+        public readonly uint ShapeType;
+        public readonly WarpBehaviorType BehaviorType;
+
+        public EffectorRuntime(WarpEffectorData data)
+        {
+            Start = ToSimVector(data.StartPoint);
+            End = ToSimVector(data.EndPoint);
+            var directed = End - Start;
+            DirectedUnit = directed.LengthSquared() > SpringEpsilon
+                ? SimVector2.Normalize(directed)
+                : SimVector2.Zero;
+            RadiusSq = data.Radius * data.Radius;
+            float sigma = MathF.Max(data.Radius * 0.5f, 1e-4f);
+            SigmaDenom = 2.0f * sigma * sigma;
+            Strength = data.Strength;
+            AnimatedRadius = data.AnimatedRadius;
+            RingWidth = MathF.Max(data.RingWidth, 1.0f);
+            ShapeType = data.ShapeType;
+            BehaviorType = (WarpBehaviorType)data.BehaviorType;
+        }
+    }
 
     public override void _Ready()
     {
@@ -234,6 +267,8 @@ public partial class WarpGridManager : Node2D
         _points = new WarpGridPoint[pointCount];
         _edgeMask = new bool[pointCount];
         _sleeping = new bool[pointCount];
+        _springForces = new SimVector2[pointCount];
+        _effectorForces = new SimVector2[pointCount];
         _positionsScratch = new byte[pointCount * WarpGridGpuManifest.PositionTexelStride];
 
         float spacingX = GridSizePixels.X / Math.Max(1, _physicsGridW);
@@ -250,21 +285,6 @@ public partial class WarpGridManager : Node2D
             }
         }
 
-        var springs = new List<WarpGridSpring>(pointCount * 3);
-        for (int y = 0; y < PhysNodesY; y++)
-        {
-            for (int x = 0; x < PhysNodesX; x++)
-            {
-                int index = IndexOf(x, y);
-                if (x + 1 < PhysNodesX)
-                    springs.Add(new WarpGridSpring(index, IndexOf(x + 1, y), GridSpringType.Right, spacingX));
-                if (y + 1 < PhysNodesY)
-                    springs.Add(new WarpGridSpring(index, IndexOf(x, y + 1), GridSpringType.Up, spacingY));
-                springs.Add(new WarpGridSpring(index, index, GridSpringType.OriginalPosition, 0.0f));
-            }
-        }
-
-        _springs = springs.ToArray();
     }
 
     void BuildMaterial()
@@ -305,19 +325,24 @@ public partial class WarpGridManager : Node2D
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
 
-        for (int i = 0; i < _points.Length; i++)
-        {
-            _points[i].Acceleration = SimVector2.Zero;
-            var displacement = _points[i].Position - _points[i].Anchor;
-            _sleeping[i] = displacement.LengthSquared() <= sleepSq && _points[i].Velocity.LengthSquared() <= sleepSq;
-        }
-
-        ApplyEffectors();
-        ApplySpringForces();
-
-        for (int i = 0; i < _points.Length; i++)
+        Parallel.For(0, _points.Length, i =>
         {
             ref var point = ref _points[i];
+            point.Acceleration = SimVector2.Zero;
+            var displacement = point.Position - point.Anchor;
+            _sleeping[i] = displacement.LengthSquared() <= sleepSq && _points[i].Velocity.LengthSquared() <= sleepSq;
+            _springForces[i] = SimVector2.Zero;
+            _effectorForces[i] = SimVector2.Zero;
+        });
+
+        EffectorRuntime[] effectors = GatherActiveEffectors();
+        ApplyEffectors(effectors);
+        ApplySpringForces();
+
+        Parallel.For(0, _points.Length, i =>
+        {
+            ref var point = ref _points[i];
+            point.Acceleration = _springForces[i] + _effectorForces[i];
 
             if (_clampEdges && _edgeMask[i])
             {
@@ -347,121 +372,152 @@ public partial class WarpGridManager : Node2D
                 point.Position = point.Anchor;
                 point.Velocity = SimVector2.Zero;
             }
-        }
+        });
     }
 
-    void ApplyEffectors()
+    EffectorRuntime[] GatherActiveEffectors()
     {
         var gridOrigin = ToSimVector(GlobalPosition);
         var gridMin = gridOrigin;
         var gridMax = gridOrigin + ToSimVector(GridSizePixels);
+        var active = new List<EffectorRuntime>();
 
         foreach (Node node in GetTree().GetNodesInGroup(WarpEffector.Group))
         {
             if (node is not WarpEffector eff || !eff.Visible)
                 continue;
 
-            var globalPos = ToSimVector(eff.GlobalPosition);
-            float radius = eff.Radius;
-            if (globalPos.X + radius < gridMin.X || globalPos.X - radius > gridMax.X)
-                continue;
-            if (globalPos.Y + radius < gridMin.Y || globalPos.Y - radius > gridMax.Y)
-                continue;
-
             WarpEffectorData data = eff.ToData(GlobalPosition, GridSizePixels);
-            var start = ToSimVector(data.StartPoint);
-            var end = ToSimVector(data.EndPoint);
-            float radiusSq = data.Radius * data.Radius;
-            float sigma = MathF.Max(data.Radius * 0.5f, 1e-4f);
-            float denom = 2.0f * sigma * sigma;
-            float behaviorScale = data.BehaviorType == (uint)WarpBehaviorType.Impulse ? 2.0f : 1.0f;
+            var globalPos = ToSimVector(eff.GlobalPosition);
+            float effectiveRadius = MathF.Max(data.Radius, data.AnimatedRadius + data.RingWidth);
+            if (globalPos.X + effectiveRadius < gridMin.X || globalPos.X - effectiveRadius > gridMax.X)
+                continue;
+            if (globalPos.Y + effectiveRadius < gridMin.Y || globalPos.Y - effectiveRadius > gridMax.Y)
+                continue;
 
-            for (int i = 0; i < _points.Length; i++)
+            active.Add(new EffectorRuntime(data));
+        }
+
+        return active.ToArray();
+    }
+
+    void ApplyEffectors(EffectorRuntime[] effectors)
+    {
+        if (effectors.Length == 0)
+            return;
+
+        Parallel.For(0, _points.Length, i =>
+        {
+            ref readonly var point = ref _points[i];
+            SimVector2 totalForce = SimVector2.Zero;
+
+            foreach (var effector in effectors)
             {
-                ref var point = ref _points[i];
-                SimVector2 center = data.ShapeType == (uint)WarpShapeType.Line
-                    ? ClosestPointOnSegment(start, end, point.Position)
-                    : start;
+                SimVector2 center = effector.ShapeType == (uint)WarpShapeType.Line
+                    ? ClosestPointOnSegment(effector.Start, effector.End, point.Position)
+                    : effector.Start;
+
                 SimVector2 delta = point.Position - center;
                 float distanceSq = delta.LengthSquared();
-                if (distanceSq > radiusSq)
+                if (distanceSq > effector.RadiusSq)
                     continue;
 
-                SimVector2 direction;
-                if (data.ShapeType == (uint)WarpShapeType.Radial)
+                float distance = distanceSq > SpringEpsilon ? MathF.Sqrt(distanceSq) : 0.0f;
+                SimVector2 outward = distanceSq > SpringEpsilon ? delta / distance : SimVector2.Zero;
+                float gaussianFalloff = MathF.Exp(-distanceSq / effector.SigmaDenom);
+
+                SimVector2 direction = effector.ShapeType == (uint)WarpShapeType.Radial &&
+                                       effector.DirectedUnit.LengthSquared() > SpringEpsilon
+                    ? effector.DirectedUnit
+                    : outward;
+
+                float magnitude = effector.Strength * gaussianFalloff;
+
+                switch (effector.BehaviorType)
                 {
-                    SimVector2 segmentDir = end - start;
-                    direction = segmentDir.LengthSquared() > SpringEpsilon
-                        ? SimVector2.Normalize(segmentDir)
-                        : NormalizeOrZero(delta);
-                }
-                else
-                {
-                    direction = NormalizeOrZero(delta);
+                    case WarpBehaviorType.Impulse:
+                        magnitude *= 2.0f;
+                        break;
+                    case WarpBehaviorType.Vortex:
+                        direction = NormalizeOrZero(new SimVector2(-delta.Y, delta.X));
+                        magnitude *= 1.35f;
+                        break;
+                    case WarpBehaviorType.GravityWell:
+                        direction = -outward;
+                        magnitude *= 1.25f;
+                        break;
+                    case WarpBehaviorType.Shockwave:
+                    {
+                        float ringDistance = MathF.Abs(distance - effector.AnimatedRadius);
+                        if (ringDistance > effector.RingWidth)
+                            continue;
+
+                        float ringFalloff = 1.0f - (ringDistance / effector.RingWidth);
+                        magnitude = effector.Strength * ringFalloff * ringFalloff;
+                        direction = outward;
+                        break;
+                    }
                 }
 
-                float falloff = MathF.Exp(-distanceSq / denom);
-                point.Acceleration += direction * (data.Strength * falloff * behaviorScale);
+                totalForce += direction * magnitude;
             }
-        }
+
+            _effectorForces[i] = totalForce;
+        });
     }
 
     void ApplySpringForces()
     {
         float sleepSq = SleepThreshold * SleepThreshold;
+        float restX = GridSizePixels.X / Math.Max(1, _physicsGridW);
+        float restY = GridSizePixels.Y / Math.Max(1, _physicsGridH);
 
-        foreach (var spring in _springs)
+        Parallel.For(0, _points.Length, i =>
         {
-            switch (spring.Type)
+            ref readonly var point = ref _points[i];
+            SimVector2 totalForce = SimVector2.Zero;
+
+            if (!(_sleeping[i] && _effectorForces[i].LengthSquared() <= sleepSq))
             {
-                case GridSpringType.OriginalPosition:
-                    ApplyAnchorSpring(spring.PointA, sleepSq);
-                    break;
-                default:
-                    ApplyNeighborSpring(spring, sleepSq);
-                    break;
+                SimVector2 anchorOffset = point.Anchor - point.Position;
+                if (anchorOffset.LengthSquared() > sleepSq || point.Velocity.LengthSquared() > sleepSq)
+                    totalForce += (anchorOffset * _anchorPull) - (point.Velocity * _springDamping);
             }
-        }
+
+            int x = i % PhysNodesX;
+            int y = i / PhysNodesX;
+
+            if (x > 0)
+                totalForce += ComputeNeighborForce(i, IndexOf(x - 1, y), restX);
+            if (x + 1 < PhysNodesX)
+                totalForce += ComputeNeighborForce(i, IndexOf(x + 1, y), restX);
+            if (y > 0)
+                totalForce += ComputeNeighborForce(i, IndexOf(x, y - 1), restY);
+            if (y + 1 < PhysNodesY)
+                totalForce += ComputeNeighborForce(i, IndexOf(x, y + 1), restY);
+
+            _springForces[i] = totalForce;
+        });
     }
 
-    void ApplyAnchorSpring(int pointIndex, float sleepSq)
+    SimVector2 ComputeNeighborForce(int pointIndex, int neighborIndex, float restLength)
     {
-        ref var point = ref _points[pointIndex];
-        if (_sleeping[pointIndex] && point.Acceleration.LengthSquared() <= sleepSq)
-            return;
+        ref readonly var point = ref _points[pointIndex];
+        ref readonly var neighbor = ref _points[neighborIndex];
 
-        SimVector2 offset = point.Anchor - point.Position;
-        if (offset.LengthSquared() <= sleepSq && point.Velocity.LengthSquared() <= sleepSq)
-            return;
-
-        SimVector2 force = (offset * _anchorPull) - (point.Velocity * _springDamping);
-        point.Acceleration += force;
-    }
-
-    void ApplyNeighborSpring(in WarpGridSpring spring, float sleepSq)
-    {
-        ref var pointA = ref _points[spring.PointA];
-        ref var pointB = ref _points[spring.PointB];
-
-        SimVector2 offset = pointA.Position - pointB.Position;
+        SimVector2 offset = neighbor.Position - point.Position;
         float distanceSq = offset.LengthSquared();
-        float restLengthSq = spring.RestLength * spring.RestLength;
-        if (_sleeping[spring.PointA] && _sleeping[spring.PointB] && distanceSq <= restLengthSq + sleepSq)
-            return;
-
+        float restLengthSq = restLength * restLength;
         if (distanceSq <= restLengthSq)
-            return;
+            return SimVector2.Zero;
 
         float distance = MathF.Sqrt(distanceSq);
         if (distance <= SpringEpsilon)
-            return;
+            return SimVector2.Zero;
 
-        SimVector2 springOffset = offset * ((distance - spring.RestLength) / distance);
-        SimVector2 velocityDiff = pointB.Velocity - pointA.Velocity;
-        SimVector2 force = (springOffset * _springStiffness) - (velocityDiff * _springDamping);
-
-        pointA.Acceleration -= force;
-        pointB.Acceleration += force;
+        SimVector2 springOffset = offset * ((distance - restLength) / distance);
+        SimVector2 velocityDelta = neighbor.Velocity - point.Velocity;
+        return (springOffset * _springStiffness) + (velocityDelta * _springDamping);
     }
 
     void UploadPositionsTexture()
@@ -520,8 +576,11 @@ public partial class WarpGridManager : Node2D
 
     void VerifyTextureManifest()
     {
-        string shaderPath = ProjectSettings.GlobalizePath("res://shaders/WarpGridDisplay.gdshader");
-        string shaderSource = File.ReadAllText(shaderPath);
+        using var shaderFile = FileAccess.Open("res://shaders/WarpGridDisplay.gdshader", FileAccess.ModeFlags.Read);
+        if (shaderFile == null)
+            throw new InvalidOperationException("Unable to open WarpGridDisplay.gdshader for manifest verification.");
+
+        string shaderSource = shaderFile.GetAsText();
         WarpGridGpuManifest.VerifyPositionsTextureManifest(shaderSource);
     }
 }

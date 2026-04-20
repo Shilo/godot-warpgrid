@@ -20,8 +20,6 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
   Shared CPU↔shader texture packing contract for the positions texture.
 - `shaders/WarpGridDisplay.gdshader`
   Bilinear display bridge plus neon shading.
-- `shaders/WarpGrid.glsl`
-  Deprecated placeholder retained for historical reference only.
 
 ## Runtime model
 
@@ -50,7 +48,7 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 
 ## Interaction
 
-`WarpEffector` stays in pixel space. Radial effectors can behave like a push/pull brush, while line effectors use the closest point on the segment to produce elongated disturbances. `WarpMouseController` spawns a runtime effector so the grid can be pushed in the editor or in play mode without manual scene wiring.
+`WarpEffector` stays in pixel space. Force, impulse, vortex, gravity-well, and shockwave behaviors all feed the same CPU solver, while line effectors use the closest point on the segment to produce elongated disturbances. `WarpMouseController` spawns a runtime effector so the grid can be pushed in the editor or in play mode without manual scene wiring.
 
 ## Quick start
 
