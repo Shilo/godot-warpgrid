@@ -3,7 +3,10 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-struct NodeState       { vec2 position; vec2 velocity; };
+// Phase 13 — Scalar Wave model. h_curr/h_prev store scalar height (pixel magnitude);
+// dir latches the effector push direction so the display shader can warp in 2D
+// without reintroducing vector-spring instability.
+struct NodeState       { float h_curr; float h_prev; vec2 dir; };
 struct RestState       { vec2 anchor; float weight; float _pad; };
 struct WarpEffectorData {
     vec2  start_point;
@@ -19,43 +22,23 @@ layout(set = 0, binding = 1, std430) buffer WriteSt  { NodeState data[]; } r_out
 layout(set = 0, binding = 2, std430) restrict readonly  buffer RestBuf  { RestState data[]; } r_rest;
 layout(set = 0, binding = 3, std430) restrict readonly  buffer EffBuf   { WarpEffectorData data[]; } r_eff;
 
-// Phase 10 Task 3 — cleaned UBO: dropped dt, impulse_cap, falloff_scale, grid_aspect (all
-// unreferenced legacy fields from pre-pixel-space phases). 48-byte block, std140-aligned.
+// 48-byte UBO, std140. Wave model parameters.
 layout(set = 0, binding = 4, std140) uniform GridParams {
     uvec2 grid_size;         // offset 0
     vec2  grid_spacing;      // offset 8
-    float stiffness;         // offset 16
-    float damping;           // offset 20
-    float rest_stiffness;    // offset 24
-    float rest_damping;      // offset 28
-    float vel_damp;          // offset 32
-    uint  effector_count;    // offset 36
-    float rest_length_scale; // offset 40
-    float velocity_blend;    // offset 44 — Phase 9 Laplacian mix factor
+    float tension;           // offset 16 — Laplacian coupling (wave speed^2 per step)
+    float damping;           // offset 20 — global per-step height decay (<1 dissolves waves)
+    float edge_damp;         // offset 24 — sponge multiplier applied to a 3-cell fringe
+    float dir_decay;         // offset 28 — direction magnitude persistence per step
+    uint  effector_count;    // offset 32
+    float _pad0;             // offset 36
+    float _pad1;             // offset 40
+    float _pad2;             // offset 44
 } p;
 
 layout(set = 0, binding = 5, rgba32f) uniform restrict writeonly image2D positions_tex;
 
 uint idx(uvec2 c) { return c.y * p.grid_size.x + c.x; }
-
-vec2 spring_force(vec2 me_pos, vec2 me_vel, vec2 other_pos, vec2 other_vel,
-                  float rest_len, float k, float c) {
-    // Phase 6.2 guard: rest_len==0 would imply two nodes sharing an anchor (degenerate).
-    if (rest_len < 1e-9) return vec2(0.0);
-    vec2  delta = other_pos - me_pos;
-    float len   = length(delta);
-    if (len < 1e-7) return vec2(0.0);
-    vec2  dir   = delta / len;
-    // Phase 12.3 — bidirectional springs restored. Compression (x < 0) now produces outward
-    // force, letting a pushed node "punch" its neighbors into motion. This is what creates
-    // the actual travelling shockwave; the 0.1 structural clamp prevents runaway regardless.
-    // Phase 7.2: raw pixel stretch — stiffness is tuned at Unity pixel-scale so `k * px` gives
-    // an acceleration in pixels-per-step-squared that integrates cleanly.
-    float x     = len - rest_len;
-    vec2  dv    = other_vel - me_vel;
-    float f     = k * x - dot(dv, dir) * c;
-    return dir * f;
-}
 
 vec2 closest_on_segment(vec2 a, vec2 b, vec2 p0) {
     vec2  ba = b - a;
@@ -65,151 +48,111 @@ vec2 closest_on_segment(vec2 a, vec2 b, vec2 p0) {
     return a + t * ba;
 }
 
-vec2 effector_force(vec2 node_pos, WarpEffectorData e) {
-    vec2 center = (e.shape_type == 1u)
-        ? closest_on_segment(e.start_point, e.end_point, node_pos)
-        : e.start_point;
-
-    // Phase 7: pixel-space — radius, node_pos and center are all in absolute pixels, so
-    // a true circle falls out of a plain euclidean distance test. No aspect correction.
-    vec2  d_raw = node_pos - center;
-    float d2    = dot(d_raw, d_raw);
-    if (d2 > e.radius * e.radius) return vec2(0.0);
-
-    // Phase 6.2: Gaussian hump — magnitude is purely a Gaussian of distance, direction is a unit
-    //   vector so the force profile is a smooth bubble with a defined peak at the center.
-    //   sigma = radius * 0.5 places ~0.61× peak at half-radius, ~0.14× peak at the cutoff.
-    float sigma = max(e.radius, 1e-4) * 0.5;
-    float gauss = e.strength * exp(-d2 / (2.0 * sigma * sigma));
-
-    if (e.shape_type == 0u) {
-        vec2 dir_vec = e.end_point - e.start_point;
-        if (dot(dir_vec, dir_vec) > 1e-10) {
-            // Radial-Directed — constant direction, Gaussian magnitude envelope.
-            return gauss * normalize(dir_vec);
-        }
-        // Radial-Explosive — outward from center.
-        float len = length(d_raw);
-        if (len < 1e-6) return vec2(0.0);
-        return gauss * (d_raw / len);
-    }
-    // Line-Explosive — outward from closest segment point.
-    float len = length(d_raw);
-    if (len < 1e-6) return vec2(0.0);
-    return gauss * (d_raw / len);
-}
-
 void main() {
     uvec2 c = gl_GlobalInvocationID.xy;
     if (c.x >= p.grid_size.x || c.y >= p.grid_size.y) return;
 
     uint i = idx(c);
-    NodeState me      = r_in.data[i];
-    RestState rs      = r_rest.data[i];
-    vec2      rest    = rs.anchor;
-    float     rest_w  = rs.weight;
+    NodeState me = r_in.data[i];
+    RestState rs = r_rest.data[i];
+    vec2 anchor  = rs.anchor;
 
+    // Edge sponge wall — boundary nodes pinned to h=0, act as perfect absorber.
     if (c.x == 0u || c.y == 0u || c.x == p.grid_size.x - 1u || c.y == p.grid_size.y - 1u) {
-        NodeState anchor;
-        anchor.position = rest;
-        anchor.velocity = vec2(0.0);
-        r_out.data[i] = anchor;
-        imageStore(positions_tex, ivec2(c), vec4(rest, 0.0, 0.0));
+        NodeState z;
+        z.h_curr = 0.0;
+        z.h_prev = 0.0;
+        z.dir    = vec2(0.0);
+        r_out.data[i] = z;
+        imageStore(positions_tex, ivec2(c), vec4(0.0));
         return;
     }
 
-    // Phase 12.4 — Effector viscosity REMOVED. The "dampen inside radius" heuristic was
-    // eating waves before they could exit the mouse bubble. Stability now comes entirely
-    // from the Laplacian blend + the 0.2 structural clamp; no special-case damping zone.
+    // 4-neighbor Laplacian: sum heights and directions from cardinal neighbors.
+    NodeState nl = r_in.data[idx(uvec2(c.x - 1u, c.y))];
+    NodeState nr = r_in.data[idx(uvec2(c.x + 1u, c.y))];
+    NodeState nu = r_in.data[idx(uvec2(c.x, c.y - 1u))];
+    NodeState nd = r_in.data[idx(uvec2(c.x, c.y + 1u))];
+    float h_avg  = (nl.h_curr + nr.h_curr + nu.h_curr + nd.h_curr) * 0.25;
+    vec2  d_sum  = nl.dir + nr.dir + nu.dir + nd.dir;
 
-    // Phase 7: force accumulator is pixel-displacement-per-step (no dt scaling anywhere).
-    // Phase 9 Task 1: capture neighbor velocities from the read buffer for Laplacian blending.
-    vec2 force = vec2(0.0);
-    float rest_len_x = p.grid_spacing.x * p.rest_length_scale;
-    float rest_len_y = p.grid_spacing.y * p.rest_length_scale;
-    vec2 v_left = vec2(0.0), v_right = vec2(0.0), v_up = vec2(0.0), v_down = vec2(0.0);
+    // Discrete 2D wave equation (leapfrog form):
+    //   h_next = 2h - h_prev + tension * (h_avg - h)
+    // Tension = wave speed^2; stable while tension * 4 < 2 (CFL for 4-neighbor Laplacian).
+    float h_next = 2.0 * me.h_curr - me.h_prev + p.tension * (h_avg - me.h_curr);
+    h_next *= p.damping;
 
-    if (c.x > 0u) {
-        NodeState n = r_in.data[idx(uvec2(c.x - 1u, c.y))];
-        force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len_x, p.stiffness, p.damping);
-        v_left = n.velocity;
-    }
-    if (c.x + 1u < p.grid_size.x) {
-        NodeState n = r_in.data[idx(uvec2(c.x + 1u, c.y))];
-        force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len_x, p.stiffness, p.damping);
-        v_right = n.velocity;
-    }
-    if (c.y > 0u) {
-        NodeState n = r_in.data[idx(uvec2(c.x, c.y - 1u))];
-        force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len_y, p.stiffness, p.damping);
-        v_up = n.velocity;
-    }
-    if (c.y + 1u < p.grid_size.y) {
-        NodeState n = r_in.data[idx(uvec2(c.x, c.y + 1u))];
-        force += spring_force(me.position, me.velocity, n.position, n.velocity,
-                              rest_len_y, p.stiffness, p.damping);
-        v_down = n.velocity;
+    // Fringe damping: stronger decay in a 3-cell sponge so waves dissolve instead of reflect.
+    uint dx = min(c.x, p.grid_size.x - 1u - c.x);
+    uint dy = min(c.y, p.grid_size.y - 1u - c.y);
+    uint d_edge = min(dx, dy);
+    if (d_edge < 3u) {
+        float t = float(d_edge) / 3.0;  // 0 at wall, 1 at the 3rd-in ring
+        h_next *= mix(p.edge_damp, 1.0, t);
     }
 
-    // Phase 12.5 — rest_damping restored as LOCAL VISCOSITY. Per-node friction acting on
-    // absolute velocity (not inter-node), providing the "water, not jelly" feel: individual
-    // ripples settle thickly instead of bouncing forever. Anchor is now k·(rest−pos) − c·v.
-    force += ((rest - me.position) * p.rest_stiffness - me.velocity * p.rest_damping) * rest_w;
+    // Direction propagation: renormalize the 4-neighbor average; fall back to existing dir.
+    vec2  new_dir = me.dir;
+    float d_len   = length(d_sum);
+    if (d_len > 1e-6) new_dir = d_sum / d_len;
+    new_dir *= p.dir_decay;
 
-    // Phase 7: impulse and force branches collapse in displacement math — both add directly
-    // to the per-step force accumulator; structural shield below bounds the result regardless.
+    // Effectors inject height at the anchor and latch the push direction.
     for (uint e = 0u; e < p.effector_count; e++) {
         WarpEffectorData ed = r_eff.data[e];
-        force += effector_force(me.position, ed);
+        vec2 center = (ed.shape_type == 1u)
+            ? closest_on_segment(ed.start_point, ed.end_point, anchor)
+            : ed.start_point;
+        vec2  d_raw = anchor - center;
+        float d2    = dot(d_raw, d_raw);
+        if (d2 > ed.radius * ed.radius) continue;
+
+        float sigma = max(ed.radius, 1e-4) * 0.5;
+        float gauss = exp(-d2 / (2.0 * sigma * sigma));
+        float amp   = ed.strength * gauss;
+
+        // Push direction: Radial-Directed uses start→end; others radiate out from center.
+        vec2  push_dir = vec2(0.0);
+        if (ed.shape_type == 0u) {
+            vec2 dv = ed.end_point - ed.start_point;
+            if (dot(dv, dv) > 1e-10) {
+                push_dir = normalize(dv);
+            } else {
+                float len = length(d_raw);
+                if (len > 1e-6) push_dir = d_raw / len;
+            }
+        } else {
+            float len = length(d_raw);
+            if (len > 1e-6) push_dir = d_raw / len;
+        }
+
+        if (ed.behavior_type == 1u) {
+            // Impulse — set height to the Gaussian peak, overwrite direction.
+            h_next  = (abs(amp) > abs(h_next)) ? amp : h_next;
+            if (dot(push_dir, push_dir) > 1e-10) new_dir = push_dir;
+        } else {
+            // Force — accumulate height, blend direction toward push.
+            h_next += amp;
+            if (dot(push_dir, push_dir) > 1e-10) {
+                vec2 blended = mix(new_dir, push_dir, 0.5);
+                float bl = length(blended);
+                new_dir = (bl > 1e-6) ? (blended / bl) : push_dir;
+            }
+        }
     }
 
-    // Phase 7.2 mass-inertial integration — forces are accelerations (unit mass):
-    //   1) acc          = sum of forces (spring + anchor + effectors)
-    //   2) new_vel      = velocity + acc                 (inertia — Δv per step)
-    //   3) displacement = new_vel (structural-shielded)  (position += velocity)
-    //   4) new_pos      = pos + displacement
-    //   5) new_vel      = displacement * vel_damp        (velocity re-sync, then damp after move)
-    // This keeps pos/vel coherent AND gives the mesh momentum so it "slides into place"
-    // instead of teleporting — the distinction that eliminates shards at high impulse.
-    // Phase 12.3 — Momentum-Persistent integration. Key change: damping is applied to the
-    // INTENT velocity (pre-clamp), and the node remembers that intent even if the physical
-    // move was capped. Excess energy leaks into the mesh over subsequent sub-steps — this
-    // is the mechanism that lets ripples travel through the grid.
-    //   1. Intent velocity — inertia + acceleration, then exponential decay.
-    //   2. Laplacian coordination — neighbor-average blend suppresses checkerboard.
-    //   3. Displacement clamp — ONLY the physical step is bounded (0.1 cell = 3.2 px).
-    //   4. Persistence — new_vel stores the uncapped intent, NOT the limited displacement.
-    vec2 acc          = force;
-    vec2 next_vel     = (me.velocity + acc) * p.vel_damp;
-    vec2 avg_v        = (v_left + v_right + v_up + v_down) * 0.25;
-    next_vel          = mix(next_vel, avg_v, p.velocity_blend);
-    // Phase 12.4 — clamp relaxed 0.1 → 0.2. 0.2 × 4 sub-steps = 80% of a cell per frame;
-    // still under 100% so vertex swap is impossible, but fast enough for waves to trigger
-    // their neighbors before the ripple decays to below the jitter guard.
-    vec2 displacement = clamp(next_vel, -p.grid_spacing * 0.2, p.grid_spacing * 0.2);
-    vec2 new_pos      = me.position + displacement;
-    vec2 new_vel      = next_vel;
-
-    // Phase 8 — Inelastic Anchor Tether. Any node past ±1.5 cells from its rest anchor is
-    // snapped back AND has its per-axis velocity killed on the clamped axis — an "inelastic
-    // wall collision". Without the velocity-kill the node would infinitely ratchet against
-    // the tether each step (stale outward momentum + clamp = pinned, maxVel frozen).
-    vec2 max_offset  = p.grid_spacing * 1.5;
-    vec2 clamped_pos = clamp(new_pos, rs.anchor - max_offset, rs.anchor + max_offset);
-    if (clamped_pos.x != new_pos.x) new_vel.x = 0.0;
-    if (clamped_pos.y != new_pos.y) new_vel.y = 0.0;
-    new_pos = clamped_pos;
-
-    // Jitter guard — 0.01 px in absolute pixels; well below any perceivable motion.
-    if (length(new_vel) < 1e-2) new_vel = vec2(0.0);
+    // Jitter guard — kill sub-pixel noise so the grid actually settles.
+    if (abs(h_next) < 1e-2) {
+        h_next  = 0.0;
+        new_dir = vec2(0.0);
+    }
 
     NodeState result;
-    result.position = new_pos;
-    result.velocity = new_vel;
-    r_out.data[i]   = result;
+    result.h_curr = h_next;
+    result.h_prev = me.h_curr;
+    result.dir    = new_dir;
+    r_out.data[i] = result;
 
-    imageStore(positions_tex, ivec2(c), vec4(new_pos, new_vel));
+    // Display shader reads: .r = h_curr, .g = h_prev (debug), .ba = dir.
+    imageStore(positions_tex, ivec2(c), vec4(h_next, me.h_curr, new_dir.x, new_dir.y));
 }

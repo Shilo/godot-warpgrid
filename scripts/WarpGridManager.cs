@@ -68,20 +68,17 @@ public partial class WarpGridManager : Node2D
     int VisualNodesX => _gridW + 1;
     int VisualNodesY => _gridH + 1;
 
-    // Phase 12 "Stable Arcade" — paradox realized: high neighbor damping CAUSES shatter on GPU.
-    // Parallel updates with c > ~0.1 make adjacent nodes fight each other's velocity each step
-    // (checkerboard injection). Solution: offload stability burden to Laplacian blend (vb=0.3)
-    // and global decay (vd=0.92) — keep neighbor damping minimal.
-    [Export] public float Stiffness     = 0.22f;   // Phase 12.6 — tension bridge: ~2× anchor, carries waves
-    [Export] public float Damping       = 0.0f;    // no neighbor damping; Laplacian handles parallel stability
-    [Export] public float RestStiffness = 0.12f;   // Phase 12.6 — anchor yields to passing waves
-    [Export] public float RestDamping   = 0.02f;   // Phase 12.6 — minimal syrup, waves reach edges
-    [Export] public float VelDamp       = 0.99f;   // Phase 12.6 — max momentum persistence
-    // Phase 9 Laplacian blend — each step mixes velocity with 4-neighbor avg.
-    [Export] public float VelocityBlend = 0.12f;   // Phase 12.6 — just enough parallel coord, not a plate
-    // Phase 6.7: 4 sub-steps per engine _PhysicsProcess tick → 240 Hz internal rate at 60 Hz engine.
-    const int   SubSteps     = 4;
-    const float RestLenScale = 0.95f;
+    // Phase 13 — Discrete 2D Wave Equation. Scalar height field propagated by Laplacian
+    // averaging; inherently stable under parallel GPU update (no force pulls = no checker-
+    // board). Tension is wave-speed^2 (CFL: keep tension * 4 < 2). Damping is the global
+    // per-step height decay. EdgeDamp thickens energy absorption in the 3-cell fringe.
+    [Export] public float Tension   = 0.35f;   // Laplacian coupling — ripple propagation speed
+    [Export] public float Damping   = 0.996f;  // global height decay per step
+    [Export] public float EdgeDamp  = 0.85f;   // sponge multiplier at the absorbing boundary
+    [Export] public float DirDecay  = 0.995f;  // direction magnitude persistence per step
+    // Phase 13 — wave eq propagates 1 cell / iteration, so SubSteps directly scales ripple
+    // speed. 2 is enough at 36×20; raise for faster wavefronts.
+    const int   SubSteps     = 2;
     const int   MaxEffectors = 128;
 
     const int StateStride = 16;
@@ -158,18 +155,19 @@ public partial class WarpGridManager : Node2D
         using (var rMs = new MemoryStream(_restScratch))
         using (var rBw = new BinaryWriter(rMs))
         {
-            // Phase 7: positions & anchors stored in ABSOLUTE PIXEL COORDS (0..GridSizePixels).
-            // Shader math is "displacement-per-step" in pixels — no normalization, no dt scaling.
+            // Phase 13 — NodeState is now {h_curr, h_prev, dir.xy}; init all zero (flat field).
+            // RestState keeps anchor in ABSOLUTE PIXELS — effectors still compare against it
+            // to pick nodes within their radius.
             for (int y = 0; y < PhysNodesY; y++)
                 for (int x = 0; x < PhysNodesX; x++)
                 {
                     float px = (float)x / PhysGridW * GridSizePixels.X;
                     float py = (float)y / PhysGridH * GridSizePixels.Y;
-                    sBw.Write(px); sBw.Write(py);
-                    sBw.Write(0.0f); sBw.Write(0.0f);
+                    sBw.Write(0.0f); sBw.Write(0.0f);   // h_curr, h_prev
+                    sBw.Write(0.0f); sBw.Write(0.0f);   // dir.xy
                     rBw.Write(px); rBw.Write(py);
-                    rBw.Write(RestAnchorWeight(x, y));        // per-cell weight
-                    rBw.Write(0.0f);                          // std430 trailing pad
+                    rBw.Write(RestAnchorWeight(x, y));  // per-cell weight (unused by wave, kept for ext.)
+                    rBw.Write(0.0f);                    // std430 trailing pad
                 }
         }
 
@@ -294,22 +292,22 @@ public partial class WarpGridManager : Node2D
     void UploadParams()
     {
         // std140 UBO layout — order-critical, must match GridParams in WarpGrid.glsl.
-        // Phase 10 clean layout: 48-byte block, all fields used by the kernel.
+        // Phase 13 wave-model block, 48 bytes.
         Array.Clear(_paramScratch, 0, _paramScratch.Length);
         using var ms = new MemoryStream(_paramScratch);
         using var bw = new BinaryWriter(ms);
-        bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);   // grid_size @ 0
+        bw.Write((uint)PhysNodesX); bw.Write((uint)PhysNodesY);   // grid_size    @ 0
         float sx = GridSizePixels.X / PhysGridW;                  // grid_spacing @ 8 (pixels)
         float sy = GridSizePixels.Y / PhysGridH;
         bw.Write(sx); bw.Write(sy);
-        bw.Write(Stiffness);                                      // stiffness @ 16
-        bw.Write(Damping);                                        // damping @ 20
-        bw.Write(RestStiffness);                                  // rest_stiffness @ 24
-        bw.Write(RestDamping);                                    // rest_damping @ 28
-        bw.Write(VelDamp);                                        // vel_damp @ 32
-        bw.Write(_effCount);                                      // effector_count @ 36
-        bw.Write(RestLenScale);                                   // rest_length_scale @ 40
-        bw.Write(VelocityBlend);                                  // velocity_blend @ 44
+        bw.Write(Tension);                                        // tension      @ 16
+        bw.Write(Damping);                                        // damping      @ 20
+        bw.Write(EdgeDamp);                                       // edge_damp    @ 24
+        bw.Write(DirDecay);                                       // dir_decay    @ 28
+        bw.Write(_effCount);                                      // effector_count @ 32
+        bw.Write(0.0f);                                           // _pad0        @ 36
+        bw.Write(0.0f);                                           // _pad1        @ 40
+        bw.Write(0.0f);                                           // _pad2        @ 44
         _rd.BufferUpdate(_bufParams, 0, (uint)_paramScratch.Length, _paramScratch);
     }
 
@@ -328,10 +326,9 @@ public partial class WarpGridManager : Node2D
     }
 
     /// <summary>
-    /// Per-cell anchor weight (multiplies <c>RestStiffness</c> and <c>RestDamping</c>).
-    /// Default 1.0 everywhere. Override for softness maps — e.g., 2.0 near edges, 0.5 in
-    /// the interior — to get non-uniform "stiffness fields". Only read once at init;
-    /// changing the map at runtime requires <c>Rebuild()</c>.
+    /// Per-cell anchor weight stored in <c>RestState</c>. Unused by the current wave model,
+    /// retained for future extensions (e.g. per-cell <c>tension</c> or <c>damping</c> scaling).
+    /// Only read once at init; changing the map at runtime requires <c>Rebuild()</c>.
     /// </summary>
     protected virtual float RestAnchorWeight(int x, int y) => 1.0f;
 
