@@ -311,10 +311,10 @@ public partial class WarpGridManager : Node2D
     void InitGpu()
     {
         GD.Print("[WarpGrid] InitGpu");
-        _rd = RenderingServer.CreateLocalRenderingDevice();
+        _rd = RenderingServer.GetRenderingDevice();
         if (_rd == null)
         {
-            GD.PushWarning("WarpGridManager: local RenderingDevice unavailable (Compatibility renderer?). Switch the project renderer to Forward+ or Mobile for the PBD simulation.");
+            GD.PushWarning("WarpGridManager: RenderingDevice unavailable (Compatibility renderer?). Switch the project renderer to Forward+ or Mobile for the PBD simulation.");
             return;
         }
 
@@ -442,9 +442,6 @@ public partial class WarpGridManager : Node2D
             _readIsA = !_readIsA;
             _lastDispatchPhase = phase;
         }
-
-        _rd.Submit();
-        _rd.Sync();
     }
 
     void UploadEffectors()
