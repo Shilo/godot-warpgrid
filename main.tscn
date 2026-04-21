@@ -1,6 +1,11 @@
-[gd_scene format=3 uid="uid://djb16kdnyk0cc" load_steps=2]
+[gd_scene format=3 uid="uid://djb16kdnyk0cc"]
 
-[ext_resource type="Script" path="res://WarpGridManager.cs" id="1_e2rl1"]
+[ext_resource type="Script" uid="uid://cggre17kfvjyl" path="res://WarpGridManager.cs" id="1_e2rl1"]
 
 [node name="Main" type="Node2D" unique_id=1352157811]
 script = ExtResource("1_e2rl1")
+GridSpacing = Vector2(32, 32)
+HoldDirectedForce = 120.0
+HoldImpulseForce = 96.0
+ClickExplosiveForce = 180.0
+ClickImplosiveForce = 80.0
