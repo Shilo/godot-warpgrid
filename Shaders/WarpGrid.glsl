@@ -73,7 +73,7 @@ vec2 getForceForNeighbour(
     const float springLength,
     const float dampingFactor
 ) {
-    vec2 d = posBuffer.data[nIdx.x * nIdx.y].pos - posBuffer.data[idx].pos;
+    vec2 d = posBuffer.data[nIdx.x].pos - posBuffer.data[idx].pos;
     float dLength = length(d);
     float divisor = dLength + (dLength == 0.0 ? 1.0 : 0.0);
     vec2 dN = d / (divisor == 0.0 ? 1.0 : divisor);
@@ -86,33 +86,13 @@ vec2 getMouseForce(const int idx) {
         return vec2(0.0);
     }
 
-    float worldGridSideLengthX = float(sX) * propertiesBuffer.springLength;
-    float worldGridSideLengthY = float(sY) * propertiesBuffer.springLength;
-
-    int xPosition = int(((mouse.position.x + (worldGridSideLengthX / 2.0)) / worldGridSideLengthX) * float(sX));
-    int yPosition = int(((mouse.position.y + (worldGridSideLengthY / 2.0)) / worldGridSideLengthY) * float(sY));
-
-    if (xPosition < 0 || xPosition >= sX || yPosition < 0 || yPosition >= sY) {
+    vec2 dir = posBuffer.data[idx].pos - mouse.position;
+    float dist = length(dir);
+    if (dist > mouse.radius || dist < 0.001) {
         return vec2(0.0);
     }
 
-    if (distance(posBuffer.data[idx].pos, mouse.position) > mouse.radius) {
-        return vec2(0.0);
-    }
-
-    int centerIndex = xPosition + yPosition * sX;
-    if (idx == centerIndex) {
-        return vec2(0.0, -mouse.strength);
-    }
-
-    for (int n = 0; n < 8; ++n) {
-        ivec2 neighbour = neighboursBuffer.data[centerIndex].neighbours[n];
-        if (neighbour.y != 0 && neighbour.x == idx) {
-            return vec2(0.0, -(mouse.strength * 0.5));
-        }
-    }
-
-    return vec2(0.0);
+    return (dir / dist) * mouse.strength * (1.0 - (dist / mouse.radius));
 }
 
 #ifdef WARPGRID_VELOCITY_PASS
@@ -189,8 +169,10 @@ void main() {
     }
 
     float delta = deltaTimeBuffer.deltaTime;
+    vec2 vel = velBuffer.data[idx].vel * propertiesBuffer.damping;
     externalForcesBuffer.data[idx].force = vec2(0.0);
-    posBuffer.data[idx].pos = posBuffer.data[idx].pos + (velBuffer.data[idx].vel * delta);
+    velBuffer.data[idx].vel = vel;
+    posBuffer.data[idx].pos = posBuffer.data[idx].pos + (vel * delta);
     imageStore(positionsImage, id, vec4(posBuffer.data[idx].pos, 0.0, 1.0));
 }
 #endif

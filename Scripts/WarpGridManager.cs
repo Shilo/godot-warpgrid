@@ -6,11 +6,11 @@ using System.Collections.Generic;
 public partial class WarpGridManager : Node2D
 {
     [Export] public float Mass { get; set; } = 1.0f;
-    [Export] public float Damping { get; set; } = 0.05f;
-    [Export] public float Stiffness { get; set; } = 0.5f;
+    [Export] public float Damping { get; set; } = 0.98f;
+    [Export] public float Stiffness { get; set; } = 0.3f;
     [Export] public float RestLength { get; set; } = 1.0f;
-    [Export] public float MouseStrength { get; set; } = 100.0f;
-    [Export] public float MouseRadius { get; set; } = 2.0f;
+    [Export] public float MouseStrength { get; set; } = 5000.0f;
+    [Export] public float MouseRadius { get; set; } = 150.0f;
     [Export(PropertyHint.Range, "0.1,1.0,0.01")] public float ViewportFill { get; set; } = 0.7f;
     [Export] public Color LineColor { get; set; } = new(0.14f, 0.81f, 0.96f, 1.0f);
 
