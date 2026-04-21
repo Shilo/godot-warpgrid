@@ -9,9 +9,9 @@ public partial class WarpGridManager : Node2D
     [Export] public float Damping { get; set; } = 0.98f;
     [Export] public float Stiffness { get; set; } = 0.3f;
     [Export] public float RestLength { get; set; } = 1.0f;
-    [Export] public float MouseStrength { get; set; } = 5000.0f;
-    [Export] public float MouseRadius { get; set; } = 150.0f;
-    [Export(PropertyHint.Range, "0.1,1.0,0.01")] public float ViewportFill { get; set; } = 0.7f;
+    [Export] public float MouseStrength { get; set; } = 1500.0f;
+    [Export] public float MouseRadius { get; set; } = 120.0f;
+    [Export(PropertyHint.Range, "0.1,1.0,0.01")] public float ViewportFill { get; set; } = 1.0f;
     [Export] public Color LineColor { get; set; } = new(0.14f, 0.81f, 0.96f, 1.0f);
 
     private const int ThreadGroupSizeX = 4;
@@ -87,6 +87,7 @@ public partial class WarpGridManager : Node2D
     public override void _Process(double delta)
     {
         Vector2 viewportSize = GetViewportRect().Size;
+        Position = viewportSize * 0.5f;
         if (viewportSize == _lastViewportSize)
         {
             return;
@@ -513,7 +514,7 @@ public partial class WarpGridManager : Node2D
         float simHeight = Mathf.Max(GetWorldGridSideLengthY(), 1.0f);
         float scaleX = (viewportSize.X * ViewportFill) / simWidth;
         float scaleY = (viewportSize.Y * ViewportFill) / simHeight;
-        float uniformScale = Mathf.Max(1.0f, Mathf.Min(scaleX, scaleY));
+        float uniformScale = Mathf.Min(scaleX, scaleY);
 
         Scale = Vector2.One * uniformScale;
     }

@@ -88,7 +88,7 @@ vec2 getMouseForce(const int idx) {
 
     vec2 dir = posBuffer.data[idx].pos - mouse.position;
     float dist = length(dir);
-    if (dist > mouse.radius || dist < 0.001) {
+    if (dist > mouse.radius || dist < 0.0001) {
         return vec2(0.0);
     }
 
