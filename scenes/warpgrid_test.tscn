@@ -3,11 +3,22 @@
 [ext_resource type="Script" uid="uid://corlwgia51h2m" path="res://scripts/WarpGridManager.cs" id="1_mgr"]
 [ext_resource type="Script" uid="uid://bep6cvmq5a4sq" path="res://scripts/WarpMouseController.cs" id="3_mouse"]
 
+[sub_resource type="Gradient" id="Gradient_efbb0"]
+offsets = PackedFloat32Array(0, 0.65, 1)
+colors = PackedColorArray(0.15, 0.55, 1, 1, 0.44750002, 0.7075, 1, 1, 1, 1, 1, 1)
+
 [node name="WarpGridRoot" type="Node2D" unique_id=1198507561]
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
+NeighborStiffness = 0.74
+AnchorStiffness = 0.7
+GlobalDamping = 0.9
+Friction = 0.34
+EnergyGradient = SubResource("Gradient_efbb0")
 
 [node name="WarpMouseController" type="Node2D" parent="." unique_id=-1984508179]
 script = ExtResource("3_mouse")
+ForceStrength = 10.0
+ImpulseStrength = 50.0
 EditorForceMultiplier = 0.05

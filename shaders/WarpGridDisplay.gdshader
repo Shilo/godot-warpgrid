@@ -54,7 +54,7 @@ void vertex() {
 	vec2 jitter = jitter_noise(node_coord + vec2(TIME * 23.0, TIME * 17.0));
 	float jitter_mask = clamp(speed * 0.08, 0.0, 1.0);
 	VERTEX = current_pos + vel * motion_blur_strength * blur_mask + jitter * jitter_strength * jitter_mask;
-	v_energy = speed / physics_min_spacing;
+	v_energy = speed / (physics_min_spacing * 0.25);
 	v_stretch = max((stretch_x + stretch_y) * 0.5, 1e-4);
 	v_velocity = vel;
 }

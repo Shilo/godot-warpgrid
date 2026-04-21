@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass, Tool]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 30.0f;   // PBD pixel-space brush, additive each tick
-    [Export] public float ImpulseStrength = 150.0f;  // PBD pixel-space middle-click punch
+    [Export] public float ForceStrength   = 120.0f;  // PBD pixel-space brush, additive each tick
+    [Export] public float ImpulseStrength = 600.0f;  // PBD pixel-space middle-click punch
     [Export] public float CursorRadius    = 50.0f; // Phase 12.6 — wide kickstart, wave seeded across many nodes
     // Hover preview for the editor viewport: applies ForceStrength every tick at the cursor
     // so tuning Tension/Damping doesn't require entering Play mode. Tick off if the constant

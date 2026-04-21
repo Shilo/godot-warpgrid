@@ -61,7 +61,7 @@ public partial class WarpGridManager : Node2D
     int _subSteps = 2;
     int _solverIterations = 4;
     float _neighborStiffness = 0.35f;
-    float _anchorStiffness = 0.10f;
+    float _anchorStiffness = 0.02f;
     float _globalDamping = 0.985f;
     float _friction = 0.12f;
     bool _boundaryPinning = true;
@@ -497,7 +497,7 @@ public partial class WarpGridManager : Node2D
         bw.Write(Mathf.Clamp(_globalDamping, 0.0f, 1.0f));
         bw.Write(Mathf.Clamp(_friction, 0.0f, 1.0f));
         bw.Write(_effCount);
-        bw.Write(1.0f / _subSteps);
+        bw.Write(1.0f);
         bw.Write((uint)phase.Kind);
         bw.Write(phase.ApplyEffectors ? 1u : 0u);
         bw.Write(_boundaryPinning ? 1u : 0u);
@@ -557,7 +557,7 @@ public partial class WarpGridManager : Node2D
                 SubSteps = 2;
                 SolverIterations = 4;
                 NeighborStiffness = 0.35f;
-                AnchorStiffness = 0.10f;
+                AnchorStiffness = 0.02f;
                 GlobalDamping = 0.985f;
                 Friction = 0.12f;
                 SpiralFactor = 0.72f;
