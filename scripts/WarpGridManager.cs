@@ -311,10 +311,10 @@ public partial class WarpGridManager : Node2D
     void InitGpu()
     {
         GD.Print("[WarpGrid] InitGpu");
-        _rd = RenderingServer.GetRenderingDevice();
+        _rd = RenderingServer.CreateLocalRenderingDevice();
         if (_rd == null)
         {
-            GD.PushWarning("WarpGridManager: RenderingDevice unavailable (Compatibility renderer?). Switch the project renderer to Forward+ or Mobile for the PBD simulation.");
+            GD.PushWarning("WarpGridManager: local RenderingDevice unavailable (Compatibility renderer?). Switch the project renderer to Forward+ or Mobile for the PBD simulation.");
             return;
         }
 
