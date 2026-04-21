@@ -32,6 +32,8 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
   Applies `GeometryWars`, `ElasticSilk`, or `ArcadeRigid` defaults.
 - `SubSteps`
   Splits each 120 Hz physics tick into smaller mini-steps under heavier load for extra spring stability.
+- `AmbientTurbulence`
+  Adds a subtle time-based wind field so the sheet can idle with a gentle arcade shimmer.
 - `SpringStiffness`
   Neighbor spring pull. Higher values make the sheet feel tighter and more immediate.
 - `SpringDamping`

@@ -27,6 +27,7 @@ public static class WarpGridGpuManifest
         "v_warp = position - anchor;",
         "return length(warp) / max(physics_min_spacing, 1.0);",
         "return texture(velocity_tex, sample_uv).r / max(physics_min_spacing, 1.0);",
+        "pow(max(energy, 0.0), 2.0)",
         "float persistence = smoothstep(0.12, 1.15, energy) * phosphor_persistence;",
     };
 

@@ -59,7 +59,7 @@ void vertex() {
 
 vec4 apply_chromatic_aberration(sampler2D tex, vec2 uv, vec2 direction, float energy, float tint_scale) {
 	float overload = smoothstep(0.95, 1.8, energy);
-	float amount = clamp(pow(max(energy, 0.0), 1.75) * tint_scale, 0.0, 1.0) * (0.00125 + (0.0028 * overload));
+	float amount = clamp(pow(max(energy, 0.0), 2.0) * tint_scale, 0.0, 1.0) * (0.00125 + (0.0028 * overload));
 	vec2 offset = direction * amount;
 	float r = texture(tex, uv + offset).r;
 	float g = texture(tex, uv).g;
@@ -91,7 +91,7 @@ void fragment() {
 	float persistence = smoothstep(0.12, 1.15, energy) * phosphor_persistence;
 	vec2 aberr_dir = (length(frag_warp) > 1e-5) ? normalize(frag_warp) : vec2(1.0, 0.0);
 	float overload = smoothstep(0.95, 1.85, energy);
-	float aberr = clamp((pow(max(energy, 0.0), 1.8) * 0.075) + (overload * 0.22), 0.0, 1.0);
+	float aberr = clamp((pow(max(energy, 0.0), 2.0) * 0.075) + (overload * 0.22), 0.0, 1.0);
 	vec3 hot_rgb = hot_wire_tint(line_color.rgb, max(velocity_energy, energy * 0.7));
 
 	if (display_mode == 1) {
