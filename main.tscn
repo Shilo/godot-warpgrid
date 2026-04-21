@@ -1,3 +1,8 @@
-[gd_scene format=3 uid="uid://djb16kdnyk0cc"]
+[gd_scene load_steps=2 format=3 uid="uid://djb16kdnyk0cc"]
+
+[ext_resource type="Script" path="res://Scripts/WarpGridManager.cs" id="1_66v8u"]
 
 [node name="Main" type="Node2D" unique_id=513570337]
+script = ExtResource("1_66v8u")
+
+[node name="WarpGridDisplay" type="MeshInstance2D" parent="."]
