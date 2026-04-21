@@ -41,16 +41,16 @@ public partial class WarpGridManager : Node2D
 
     [ExportGroup("Mouse Force")]
     [Export]
-    public float HoldDirectedForce { get; set; } = 60.0f;
+    public float HoldExplosiveForce { get; set; } = 30.0f;
 
     [Export]
-    public float HoldDirectedRadius { get; set; } = 65.0f;
+    public float HoldExplosiveRadius { get; set; } = 80.0f;
 
     [Export]
-    public float HoldImpulseForce { get; set; } = 24.0f;
+    public float HoldDirectedForce { get; set; } = 45.0f;
 
     [Export]
-    public float HoldImpulseRadius { get; set; } = 90.0f;
+    public float HoldDirectedRadius { get; set; } = 60.0f;
 
     [Export]
     public float ClickExplosiveForce { get; set; } = 90.0f;
@@ -103,7 +103,7 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
-        HandlePointerForces();
+        HandlePointerForces((float)(delta * 60.0));
 
         foreach (Spring spring in _springs)
         {
@@ -338,7 +338,7 @@ public partial class WarpGridManager : Node2D
         _arrayMesh.SurfaceSetMaterial(0, _lineMaterial);
     }
 
-    private void HandlePointerForces()
+    private void HandlePointerForces(float stepScale)
     {
         bool leftPressed = Input.IsMouseButtonPressed(MouseButton.Left);
         bool rightPressed = Input.IsMouseButtonPressed(MouseButton.Right);
@@ -365,12 +365,12 @@ public partial class WarpGridManager : Node2D
         {
             if (leftPressed)
             {
-                ApplyDirectedForce(new Vector3(0.0f, 0.0f, HoldDirectedForce), mousePosition, HoldDirectedRadius);
+                ApplyExplosiveForce(HoldExplosiveForce * stepScale, mousePosition, HoldExplosiveRadius);
             }
 
             if (rightPressed)
             {
-                ApplyExplosiveForce(HoldImpulseForce, mousePosition, HoldImpulseRadius);
+                ApplyDirectedForce(new Vector3(0.0f, 0.0f, HoldDirectedForce * stepScale), mousePosition, HoldDirectedRadius);
             }
         }
 
