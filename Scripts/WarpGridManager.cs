@@ -70,6 +70,12 @@ public partial class WarpGridManager : Node2D
 
         EnsureDisplayNode();
         CreateSimulationResources();
+        if (!_velocityShaderRid.IsValid || !_positionShaderRid.IsValid || !_velocityPipelineRid.IsValid || !_positionPipelineRid.IsValid)
+        {
+            SetPhysicsProcess(false);
+            return;
+        }
+
         CreateDisplayResources();
         _resourcesReady = true;
     }
@@ -162,6 +168,12 @@ public partial class WarpGridManager : Node2D
         string sharedSource = StripComputeHint(FileAccess.GetFileAsString("res://Shaders/WarpGrid.glsl"));
         _velocityShaderRid = CreateShaderVariant(sharedSource, "WARPGRID_VELOCITY_PASS");
         _positionShaderRid = CreateShaderVariant(sharedSource, "WARPGRID_POSITION_PASS");
+        if (!_velocityShaderRid.IsValid || !_positionShaderRid.IsValid)
+        {
+            GD.PushError("WarpGridManager failed to create one or more compute shader variants.");
+            return;
+        }
+
         _velocityPipelineRid = _rd.ComputePipelineCreate(_velocityShaderRid);
         _positionPipelineRid = _rd.ComputePipelineCreate(_positionShaderRid);
         _velocityUniformSetRid = CreateUniformSet(_velocityShaderRid);
@@ -223,13 +235,14 @@ public partial class WarpGridManager : Node2D
 
         var shaderSource = new RDShaderSource
         {
-            SourceCompute = $"#define {define}\n{sharedSource}"
+            SourceCompute = InjectDefineAfterVersion(sharedSource, define)
         };
 
         RDShaderSpirV spirv = _rd.ShaderCompileSpirVFromSource(shaderSource);
         if (!string.IsNullOrEmpty(spirv.CompileErrorCompute))
         {
             GD.PushError($"{define} compile error: {spirv.CompileErrorCompute}");
+            return new Rid();
         }
 
         return _rd.ShaderCreateFromSpirV(spirv, define);
@@ -566,6 +579,24 @@ public partial class WarpGridManager : Node2D
     private static string StripComputeHint(string source)
     {
         return source.Replace("#[compute]\r\n", string.Empty).Replace("#[compute]\n", string.Empty);
+    }
+
+    private static string InjectDefineAfterVersion(string source, string define)
+    {
+        const string versionLine = "#version 450";
+        int versionIndex = source.IndexOf(versionLine, StringComparison.Ordinal);
+        if (versionIndex < 0)
+        {
+            return $"#define {define}\n{source}";
+        }
+
+        int lineEndIndex = source.IndexOf('\n', versionIndex);
+        if (lineEndIndex < 0)
+        {
+            return $"{source}\n#define {define}\n";
+        }
+
+        return source.Insert(lineEndIndex + 1, $"#define {define}\n");
     }
 
     private void ReleaseResources()
