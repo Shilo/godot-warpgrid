@@ -1,5 +1,7 @@
+﻿#nullable enable
 using Godot;
 using System;
+using System.Collections.Generic;
 
 public partial class WarpGridManager : Node2D
 {
@@ -27,22 +29,22 @@ public partial class WarpGridManager : Node2D
     private RenderingDevice? _rd;
     private MeshInstance2D? _display;
     private ShaderMaterial? _displayMaterial;
-    private Texture2DRD? _positionsTexture;
+    private Texture2Drd? _positionsTexture;
 
-    private RID _positionBufferRid = new();
-    private RID _velocityBufferRid = new();
-    private RID _externalForcesBufferRid = new();
-    private RID _neighboursBufferRid = new();
-    private RID _mouseUniformRid = new();
-    private RID _propertiesUniformRid = new();
-    private RID _deltaUniformRid = new();
-    private RID _positionsTextureRid = new();
-    private RID _velocityShaderRid = new();
-    private RID _positionShaderRid = new();
-    private RID _velocityPipelineRid = new();
-    private RID _positionPipelineRid = new();
-    private RID _velocityUniformSetRid = new();
-    private RID _positionUniformSetRid = new();
+    private Rid _positionBufferRid = new();
+    private Rid _velocityBufferRid = new();
+    private Rid _externalForcesBufferRid = new();
+    private Rid _neighboursBufferRid = new();
+    private Rid _mouseUniformRid = new();
+    private Rid _propertiesUniformRid = new();
+    private Rid _deltaUniformRid = new();
+    private Rid _positionsTextureRid = new();
+    private Rid _velocityShaderRid = new();
+    private Rid _positionShaderRid = new();
+    private Rid _velocityPipelineRid = new();
+    private Rid _positionPipelineRid = new();
+    private Rid _velocityUniformSetRid = new();
+    private Rid _positionUniformSetRid = new();
 
     private bool _pointerHeld;
     private bool _touchActive;
@@ -173,7 +175,7 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
-        _positionsTexture = new Texture2DRD
+        _positionsTexture = new Texture2Drd
         {
             TextureRdRid = _positionsTextureRid
         };
@@ -190,11 +192,11 @@ public partial class WarpGridManager : Node2D
         _display.Material = _displayMaterial;
     }
 
-    private RID CreateUniformSet(RID shaderRid)
+    private Rid CreateUniformSet(Rid shaderRid)
     {
         if (_rd == null)
         {
-            return new RID();
+            return new Rid();
         }
 
         var uniforms = new Godot.Collections.Array<RDUniform>
@@ -212,11 +214,11 @@ public partial class WarpGridManager : Node2D
         return _rd.UniformSetCreate(uniforms, shaderRid, 0);
     }
 
-    private RID CreateShaderVariant(string sharedSource, string define)
+    private Rid CreateShaderVariant(string sharedSource, string define)
     {
         if (_rd == null)
         {
-            return new RID();
+            return new Rid();
         }
 
         var shaderSource = new RDShaderSource
@@ -224,7 +226,7 @@ public partial class WarpGridManager : Node2D
             SourceCompute = $"#define {define}\n{sharedSource}"
         };
 
-        RDShaderSPIRV spirv = _rd.ShaderCompileSpirvFromSource(shaderSource);
+        RDShaderSpirV spirv = _rd.ShaderCompileSpirVFromSource(shaderSource);
         if (!string.IsNullOrEmpty(spirv.CompileErrorCompute))
         {
             GD.PushError($"{define} compile error: {spirv.CompileErrorCompute}");
@@ -233,23 +235,23 @@ public partial class WarpGridManager : Node2D
         return _rd.ShaderCreateFromSpirV(spirv, define);
     }
 
-    private RID CreatePositionsTexture(Vector2[] positions)
+    private Rid CreatePositionsTexture(Vector2[] positions)
     {
         if (_rd == null)
         {
-            return new RID();
+            return new Rid();
         }
 
         var format = new RDTextureFormat
         {
-            Width = GridResX,
-            Height = GridResY,
+            Width = (uint)GridResX,
+            Height = (uint)GridResY,
             Depth = 1,
             ArrayLayers = 1,
             Mipmaps = 1,
             TextureType = RenderingDevice.TextureType.Type2D,
             Format = PositionsTextureFormat,
-            UsageBits = 1 | 8
+            UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.StorageBit
         };
 
         byte[] initialPixels = BuildInitialTextureBytes(positions);
@@ -282,7 +284,7 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
-        int computeList = _rd.ComputeListBegin();
+        long computeList = _rd.ComputeListBegin();
         _rd.ComputeListBindComputePipeline(computeList, _velocityPipelineRid);
         _rd.ComputeListBindUniformSet(computeList, _velocityUniformSetRid, 0);
         _rd.ComputeListDispatch(computeList, GridUnitSideX, GridUnitSideY, 1);
@@ -295,8 +297,8 @@ public partial class WarpGridManager : Node2D
 
     private ArrayMesh BuildDisplayMesh()
     {
-        var vertices = new PackedVector2Array();
-        var uvs = new PackedVector2Array();
+        var vertices = new List<Vector2>();
+        var uvs = new List<Vector2>();
 
         for (int y = 0; y < GridResY; y++)
         {
@@ -322,8 +324,8 @@ public partial class WarpGridManager : Node2D
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
-        arrays[(int)Mesh.ArrayType.Vertex] = vertices;
-        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        arrays[(int)Mesh.ArrayType.Vertex] = vertices.ToArray();
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs.ToArray();
 
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Lines, arrays);
@@ -469,7 +471,7 @@ public partial class WarpGridManager : Node2D
         return GridResY * RestLength;
     }
 
-    private static RDUniform CreateUniform(int binding, RenderingDevice.UniformType type, RID rid)
+    private static RDUniform CreateUniform(int binding, RenderingDevice.UniformType type, Rid rid)
     {
         var uniform = new RDUniform
         {
@@ -589,7 +591,7 @@ public partial class WarpGridManager : Node2D
         FreeRid(_positionBufferRid);
     }
 
-    private void FreeRid(RID rid)
+    private void FreeRid(Rid rid)
     {
         if (rid.IsValid)
         {

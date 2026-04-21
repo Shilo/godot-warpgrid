@@ -1,6 +1,12 @@
 #[compute]
 #version 450
 
+#ifndef WARPGRID_VELOCITY_PASS
+#ifndef WARPGRID_POSITION_PASS
+#define WARPGRID_VELOCITY_PASS
+#endif
+#endif
+
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 1) in;
 
 struct Position {
@@ -60,7 +66,7 @@ const int gY = 7;
 const int sX = gX * 4;
 const int sY = gY * 4;
 
-const vec2 getForceForNeighbour(
+vec2 getForceForNeighbour(
     const int idx,
     const ivec2 nIdx,
     const float stiffness,
@@ -69,7 +75,7 @@ const vec2 getForceForNeighbour(
 ) {
     vec2 d = posBuffer.data[nIdx.x * nIdx.y].pos - posBuffer.data[idx].pos;
     float dLength = length(d);
-    float divisor = dLength + float(dLength == 0.0);
+    float divisor = dLength + (dLength == 0.0 ? 1.0 : 0.0);
     vec2 dN = d / (divisor == 0.0 ? 1.0 : divisor);
     vec2 force = stiffness * (d - springLength * dN) + dampingFactor * (velBuffer.data[nIdx.x].vel - velBuffer.data[idx].vel);
     return force * float(nIdx.y);
@@ -109,7 +115,7 @@ vec2 getMouseForce(const int idx) {
     return vec2(0.0);
 }
 
-#if defined(WARPGRID_VELOCITY_PASS)
+#ifdef WARPGRID_VELOCITY_PASS
 void main() {
     ivec2 id = ivec2(gl_GlobalInvocationID.xy);
     int idx = id.x + id.y * sX;
