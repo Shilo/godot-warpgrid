@@ -31,6 +31,7 @@ public partial class WarpGridManager : Node2D
     float _mass = 1.0f;
     bool _clampEdges = true;
     int _subSteps = 2;
+    float _ambientTurbulence = 0.0f;
 
     float _accumulator;
     float _physicsSpacingX;
@@ -38,6 +39,7 @@ public partial class WarpGridManager : Node2D
     int _parallelBatchSize;
     bool _positionsDirty = true;
     float _lastLoadMetric;
+    float _ambientPhase;
 
     WarpRenderMode _renderMode = WarpRenderMode.Grid;
     VibePreset _vibePreset = VibePreset.GeometryWars;
@@ -165,6 +167,12 @@ public partial class WarpGridManager : Node2D
     {
         get => _subSteps;
         set => _subSteps = Math.Clamp(value, 1, MaxSupportedSubSteps);
+    }
+
+    [Export] public float AmbientTurbulence
+    {
+        get => _ambientTurbulence;
+        set => _ambientTurbulence = Math.Max(0.0f, value);
     }
 
     [Export] public bool ForceRebuild
@@ -422,7 +430,10 @@ public partial class WarpGridManager : Node2D
             float stepScale = 1.0f / subStepCount;
 
             for (int subStep = 0; subStep < subStepCount; subStep++)
+            {
+                _ambientPhase += FixedDt * stepScale;
                 SimulatePhysics(stepScale, effectorCount);
+            }
 
             _accumulator -= FixedDt;
             stepped = true;
@@ -438,6 +449,9 @@ public partial class WarpGridManager : Node2D
 
     void SimulatePhysics(float stepScale, int effectorCount)
     {
+        // The hot loops below walk the SoA buffers linearly so the CPU gets tight,
+        // cache-friendly access patterns and the JIT has the best chance to elide
+        // bounds checks and auto-vectorize the branch-light arithmetic.
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
         float damping = MathF.Pow(_globalDamping, stepScale);
@@ -665,6 +679,11 @@ public partial class WarpGridManager : Node2D
         float sleepSq = SleepThreshold * SleepThreshold;
         float restX = _physicsSpacingX;
         float restY = _physicsSpacingY;
+        bool useAmbient = _ambientTurbulence > 0.0f;
+        float ambientStrength = _ambientTurbulence;
+        float phase = _ambientPhase;
+        float invGridWidth = GridSizePixels.X > 0.0f ? 1.0f / GridSizePixels.X : 0.0f;
+        float invGridHeight = GridSizePixels.Y > 0.0f ? 1.0f / GridSizePixels.Y : 0.0f;
 
         ForEachPointRange((start, end) =>
         {
@@ -676,6 +695,7 @@ public partial class WarpGridManager : Node2D
 
                 if (_sleeping[i] &&
                     ((totalX * totalX) + (totalY * totalY) <= sleepSq) &&
+                    !useAmbient &&
                     AreNeighboringNodesSleeping(i, x))
                 {
                     _accX[i] = totalX;
@@ -700,6 +720,18 @@ public partial class WarpGridManager : Node2D
                     AddNeighborForce(i, i - PhysNodesX, restY, ref totalX, ref totalY);
                 if (i + PhysNodesX < PointCount)
                     AddNeighborForce(i, i + PhysNodesX, restY, ref totalX, ref totalY);
+
+                if (useAmbient && !(_clampEdges && _edgeMask[i]))
+                {
+                    float anchorU = _anchorX[i] * invGridWidth;
+                    float anchorV = _anchorY[i] * invGridHeight;
+                    float gustX = MathF.Sin((anchorV * 10.0f) + (phase * 0.83f)) +
+                                  MathF.Cos((anchorU * 14.0f) - (phase * 0.57f));
+                    float gustY = MathF.Cos((anchorU * 12.5f) + (phase * 0.71f)) -
+                                  MathF.Sin((anchorV * 8.5f) - (phase * 0.49f));
+                    totalX += gustX * ambientStrength * 0.35f;
+                    totalY += gustY * ambientStrength * 0.24f;
+                }
 
                 _accX[i] = totalX;
                 _accY[i] = totalY;

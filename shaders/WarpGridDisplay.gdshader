@@ -58,7 +58,8 @@ void vertex() {
 }
 
 vec4 apply_chromatic_aberration(sampler2D tex, vec2 uv, vec2 direction, float energy, float tint_scale) {
-	float amount = clamp(energy * tint_scale, 0.0, 1.0) * 0.0015;
+	float overload = smoothstep(0.95, 1.8, energy);
+	float amount = clamp(pow(max(energy, 0.0), 1.75) * tint_scale, 0.0, 1.0) * (0.00125 + (0.0028 * overload));
 	vec2 offset = direction * amount;
 	float r = texture(tex, uv + offset).r;
 	float g = texture(tex, uv).g;
@@ -89,7 +90,8 @@ void fragment() {
 	float glow = smoothstep(0.0, 1.0, energy * glow_gain);
 	float persistence = smoothstep(0.12, 1.15, energy) * phosphor_persistence;
 	vec2 aberr_dir = (length(frag_warp) > 1e-5) ? normalize(frag_warp) : vec2(1.0, 0.0);
-	float aberr = clamp(energy * 0.08, 0.0, 1.0);
+	float overload = smoothstep(0.95, 1.85, energy);
+	float aberr = clamp((pow(max(energy, 0.0), 1.8) * 0.075) + (overload * 0.22), 0.0, 1.0);
 	vec3 hot_rgb = hot_wire_tint(line_color.rgb, max(velocity_energy, energy * 0.7));
 
 	if (display_mode == 1) {
@@ -103,9 +105,9 @@ void fragment() {
 	} else {
 		vec2 cells = vec2(display_grid_dims);
 		float taper = mix(0.92, 0.34, smoothstep(0.0, 0.95, energy));
-		float line_mask_r = grid_line_mask(UV + aberr_dir * aberr * 0.6, cells, taper);
+		float line_mask_r = grid_line_mask(UV + aberr_dir * aberr * (0.55 + (0.9 * overload)), cells, taper);
 		float line_mask_g = grid_line_mask(UV, cells, taper);
-		float line_mask_b = grid_line_mask(UV - aberr_dir * aberr * 0.6, cells, taper);
+		float line_mask_b = grid_line_mask(UV - aberr_dir * aberr * (0.55 + (0.9 * overload)), cells, taper);
 		float persistence_mask = grid_line_mask(UV, cells, taper * 2.1);
 		vec3 lit_rgb = hot_rgb * vec3(line_mask_r, line_mask_g, line_mask_b);
 		float line_mask = max(max(line_mask_r, line_mask_g), line_mask_b);
