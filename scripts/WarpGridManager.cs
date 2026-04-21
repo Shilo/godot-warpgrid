@@ -431,7 +431,7 @@ public partial class WarpGridManager : Node2D
 
     public override void _PhysicsProcess(double delta)
     {
-        if (!_isInitialized || _rd == null) return;
+        if (!_isInitialized || _rd == null || !_pipeline.IsValid) return;
 
         UploadEffectors();
 

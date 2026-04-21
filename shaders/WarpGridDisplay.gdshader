@@ -116,19 +116,17 @@ void fragment() {
 		base = vec4(max(base.rgb, trail.rgb * trail_mix), max(base.a, trail.a * trail_mix));
 	}
 
-	if (chromatic_strength <= 0.0 || v_energy <= CHROMATIC_THRESHOLD) {
+	if (chromatic_strength > 0.0 && v_energy > CHROMATIC_THRESHOLD) {
+		float split_strength = (v_energy - CHROMATIC_THRESHOLD) * chromatic_strength / max(max(grid_size_pixels.x, grid_size_pixels.y), 1.0);
+		vec2 split_offset = vec2(split_strength, split_strength * 0.35);
+		vec4 plus = display_color(UV + split_offset, glow);
+		vec4 minus = display_color(UV - split_offset, glow);
+		float fringe_mix = clamp((v_energy - CHROMATIC_THRESHOLD) * 0.4, 0.0, 1.0);
+
+		vec3 fringed = vec3(plus.r, base.g, minus.b);
+		COLOR = vec4(mix(base.rgb, fringed, fringe_mix), max(max(plus.a, base.a), minus.a));
+	} else {
 		COLOR = base;
-		COLOR.rgb = min(COLOR.rgb, vec3(1.0));
-		return;
 	}
-
-	float split_strength = (v_energy - CHROMATIC_THRESHOLD) * chromatic_strength / max(max(grid_size_pixels.x, grid_size_pixels.y), 1.0);
-	vec2 split_offset = vec2(split_strength, split_strength * 0.35);
-	vec4 plus = display_color(UV + split_offset, glow);
-	vec4 minus = display_color(UV - split_offset, glow);
-	float fringe_mix = clamp((v_energy - CHROMATIC_THRESHOLD) * 0.4, 0.0, 1.0);
-
-	vec3 fringed = vec3(plus.r, base.g, minus.b);
-	COLOR = vec4(mix(base.rgb, fringed, fringe_mix), max(max(plus.a, base.a), minus.a));
 	COLOR.rgb = min(COLOR.rgb, vec3(1.0));
 }
