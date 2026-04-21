@@ -49,11 +49,12 @@ void vertex() {
 		? stretch_x
 		: length(down_pos - current_pos) / max(rest_dy, 1e-4);
 	float speed = length(vel);
+	float physics_min_spacing = max(min(rest_dx, rest_dy), 1.0);
 	float blur_mask = clamp(speed / max(max(grid_size_pixels.x, grid_size_pixels.y) * 0.03, 1.0), 0.0, 1.0);
 	vec2 jitter = jitter_noise(node_coord + vec2(TIME * 23.0, TIME * 17.0));
 	float jitter_mask = clamp(speed * 0.08, 0.0, 1.0);
 	VERTEX = current_pos + vel * motion_blur_strength * blur_mask + jitter * jitter_strength * jitter_mask;
-	v_energy = speed;
+	v_energy = speed / physics_min_spacing;
 	v_stretch = max((stretch_x + stretch_y) * 0.5, 1e-4);
 	v_velocity = vel;
 }

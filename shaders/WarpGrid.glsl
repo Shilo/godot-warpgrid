@@ -214,5 +214,7 @@ void main() {
     }
 
     r_out.data[i] = out_state;
-    imageStore(positions_tex, ivec2(c), vec4(out_state.current, out_state.prev));
+    if (p.phase_kind == PHASE_FINALIZE) {
+        imageStore(positions_tex, ivec2(c), vec4(out_state.current, out_state.prev));
+    }
 }
