@@ -1,8 +1,0 @@
-[gd_scene format=3 uid="uid://djb16kdnyk0cc"]
-
-[ext_resource type="Script" uid="uid://cggre17kfvjyl" path="res://WarpGridManager.cs" id="1_e2rl1"]
-
-[node name="Main" type="Node2D" unique_id=1352157811]
-script = ExtResource("1_e2rl1")
-HoldExplosiveForce = 20.0
-ClickExplosiveForce = 800.0
