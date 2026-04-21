@@ -60,10 +60,10 @@ public partial class WarpGridManager : Node2D
 
     int _subSteps = 2;
     int _solverIterations = 4;
-    float _neighborStiffness = 0.74f;
-    float _anchorStiffness = 0.70f;
-    float _globalDamping = 0.90f;
-    float _friction = 0.34f;
+    float _neighborStiffness = 0.35f;
+    float _anchorStiffness = 0.10f;
+    float _globalDamping = 0.985f;
+    float _friction = 0.12f;
     bool _boundaryPinning = true;
     float _chromaticStrength = 1.0f;
     float _spiralFactor = 0.72f;
@@ -556,10 +556,10 @@ public partial class WarpGridManager : Node2D
             case global::WarpGrid.VibePreset.Arcade:
                 SubSteps = 2;
                 SolverIterations = 4;
-                NeighborStiffness = 0.74f;
-                AnchorStiffness = 0.70f;
-                GlobalDamping = 0.90f;
-                Friction = 0.34f;
+                NeighborStiffness = 0.35f;
+                AnchorStiffness = 0.10f;
+                GlobalDamping = 0.985f;
+                Friction = 0.12f;
                 SpiralFactor = 0.72f;
                 BoundaryPinning = true;
                 break;
