@@ -4,8 +4,5 @@
 
 [node name="Main" type="Node2D" unique_id=1352157811]
 script = ExtResource("1_e2rl1")
-GridSpacing = Vector2(32, 32)
-HoldDirectedForce = 120.0
-HoldImpulseForce = 96.0
-ClickExplosiveForce = 180.0
-ClickImplosiveForce = 80.0
+HoldExplosiveForce = 20.0
+ClickExplosiveForce = 800.0
