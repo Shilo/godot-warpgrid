@@ -6,10 +6,11 @@ using System.Collections.Generic;
 public partial class WarpGridManager : Node2D
 {
     [Export] public float Mass { get; set; } = 1.0f;
-    [Export] public float Damping { get; set; } = 0.95f;
-    [Export] public float Stiffness { get; set; } = 0.3f;
+    [Export] public float Damping { get; set; } = 0.82f;
+    [Export] public float Stiffness { get; set; } = 0.4f;
     [Export] public float RestLength { get; set; } = 1.0f;
-    [Export] public float MouseStrength { get; set; } = 1500.0f;
+    [Export] public float AnchorStiffness { get; set; } = 0.15f;
+    [Export] public float MouseStrength { get; set; } = 2000.0f;
     [Export] public float MouseRadius { get; set; } = 120.0f;
     [Export(PropertyHint.Range, "0.1,1.0,0.01")] public float ViewportFill { get; set; } = 1.0f;
     [Export] public Color LineColor { get; set; } = new(0.14f, 0.81f, 0.96f, 1.0f);
@@ -19,7 +20,7 @@ public partial class WarpGridManager : Node2D
     private const int GridUnitSideX = 15;
     private const int GridUnitSideY = 7;
     private const int MouseUniformSize = 32;
-    private const int PropertiesUniformSize = 16;
+    private const int PropertiesUniformSize = 32;
     private const int DeltaUniformSize = 16;
 
     private static readonly RenderingDevice.UniformType UniformImage = (RenderingDevice.UniformType)3;
@@ -31,8 +32,10 @@ public partial class WarpGridManager : Node2D
     private MeshInstance2D? _display;
     private ShaderMaterial? _displayMaterial;
     private Texture2Drd? _positionsTexture;
+    private Texture2Drd? _anchorTexture;
 
     private Rid _positionBufferRid = new();
+    private Rid _anchorBufferRid = new();
     private Rid _velocityBufferRid = new();
     private Rid _externalForcesBufferRid = new();
     private Rid _neighboursBufferRid = new();
@@ -40,6 +43,7 @@ public partial class WarpGridManager : Node2D
     private Rid _propertiesUniformRid = new();
     private Rid _deltaUniformRid = new();
     private Rid _positionsTextureRid = new();
+    private Rid _anchorTextureRid = new();
     private Rid _velocityShaderRid = new();
     private Rid _positionShaderRid = new();
     private Rid _velocityPipelineRid = new();
@@ -169,19 +173,21 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
-        Vector2[] positions = CreateInitialPositions();
-        byte[] positionBytes = EncodeVector2Array(positions);
+        Vector2[] initialPositions = CreateInitialPositions();
+        byte[] positionBytes = EncodeVector2Array(initialPositions);
         byte[] zeroForces = EncodeVector2Array(new Vector2[VertCount]);
         byte[] neighbours = EncodeNeighbours();
 
         _positionBufferRid = _rd.StorageBufferCreate((uint)positionBytes.Length, positionBytes);
+        _anchorBufferRid = _rd.StorageBufferCreate((uint)positionBytes.Length, positionBytes);
         _velocityBufferRid = _rd.StorageBufferCreate((uint)zeroForces.Length, zeroForces);
         _externalForcesBufferRid = _rd.StorageBufferCreate((uint)zeroForces.Length, zeroForces);
         _neighboursBufferRid = _rd.StorageBufferCreate((uint)neighbours.Length, neighbours);
         _mouseUniformRid = _rd.UniformBufferCreate(MouseUniformSize, BuildMouseUniformBytes(Vector2.Zero, MouseStrength, MouseRadius, 0u));
         _propertiesUniformRid = _rd.UniformBufferCreate(PropertiesUniformSize, BuildPropertiesUniformBytes());
         _deltaUniformRid = _rd.UniformBufferCreate(DeltaUniformSize, BuildDeltaUniformBytes(0.0f));
-        _positionsTextureRid = CreatePositionsTexture(positions);
+        _positionsTextureRid = CreateTextureFromPositions(initialPositions, RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.StorageBit);
+        _anchorTextureRid = CreateTextureFromPositions(initialPositions, RenderingDevice.TextureUsageBits.SamplingBit);
 
         string sharedSource = StripComputeHint(FileAccess.GetFileAsString("res://Shaders/WarpGrid.glsl"));
         _velocityShaderRid = CreateShaderVariant(sharedSource, "WARPGRID_VELOCITY_PASS");
@@ -209,6 +215,10 @@ public partial class WarpGridManager : Node2D
         {
             TextureRdRid = _positionsTextureRid
         };
+        _anchorTexture = new Texture2Drd
+        {
+            TextureRdRid = _anchorTextureRid
+        };
 
         Shader shader = GD.Load<Shader>("res://Shaders/WarpGridDisplay.gdshader");
         _displayMaterial = new ShaderMaterial
@@ -216,6 +226,8 @@ public partial class WarpGridManager : Node2D
             Shader = shader
         };
         _displayMaterial.SetShaderParameter("positions_texture", _positionsTexture);
+        _displayMaterial.SetShaderParameter("anchor_texture", _anchorTexture);
+        _displayMaterial.SetShaderParameter("physics_min_spacing", Mathf.Max(RestLength, 0.0001f));
         _displayMaterial.SetShaderParameter("line_color", LineColor);
 
         _display.Mesh = BuildDisplayMesh();
@@ -238,7 +250,8 @@ public partial class WarpGridManager : Node2D
             CreateUniform(4, UniformUniformBuffer, _mouseUniformRid),
             CreateUniform(5, UniformUniformBuffer, _propertiesUniformRid),
             CreateUniform(6, UniformUniformBuffer, _deltaUniformRid),
-            CreateUniform(7, UniformImage, _positionsTextureRid)
+            CreateUniform(7, UniformImage, _positionsTextureRid),
+            CreateUniform(8, UniformStorageBuffer, _anchorBufferRid)
         };
 
         return _rd.UniformSetCreate(uniforms, shaderRid, 0);
@@ -266,7 +279,7 @@ public partial class WarpGridManager : Node2D
         return _rd.ShaderCreateFromSpirV(spirv, define);
     }
 
-    private Rid CreatePositionsTexture(Vector2[] positions)
+    private Rid CreateTextureFromPositions(Vector2[] positions, RenderingDevice.TextureUsageBits usageBits)
     {
         if (_rd == null)
         {
@@ -282,7 +295,7 @@ public partial class WarpGridManager : Node2D
             Mipmaps = 1,
             TextureType = RenderingDevice.TextureType.Type2D,
             Format = PositionsTextureFormat,
-            UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.StorageBit
+            UsageBits = usageBits
         };
 
         byte[] initialPixels = BuildInitialTextureBytes(positions);
@@ -558,7 +571,7 @@ public partial class WarpGridManager : Node2D
 
     private byte[] BuildPropertiesUniformBytes()
     {
-        return EncodeFloatArray(new float[] { Mass, Damping, Stiffness, RestLength });
+        return EncodeFloatArray(new float[] { Mass, Damping, Stiffness, RestLength, AnchorStiffness, 0.0f, 0.0f, 0.0f });
     }
 
     private static byte[] BuildDeltaUniformBytes(float delta)
@@ -647,6 +660,7 @@ public partial class WarpGridManager : Node2D
         FreeRid(_positionPipelineRid);
         FreeRid(_velocityShaderRid);
         FreeRid(_positionShaderRid);
+        FreeRid(_anchorTextureRid);
         FreeRid(_positionsTextureRid);
         FreeRid(_deltaUniformRid);
         FreeRid(_propertiesUniformRid);
@@ -654,6 +668,7 @@ public partial class WarpGridManager : Node2D
         FreeRid(_neighboursBufferRid);
         FreeRid(_externalForcesBufferRid);
         FreeRid(_velocityBufferRid);
+        FreeRid(_anchorBufferRid);
         FreeRid(_positionBufferRid);
     }
 

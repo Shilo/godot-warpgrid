@@ -53,6 +53,7 @@ layout(set = 0, binding = 5, std140) uniform PropertiesBuffer {
     float damping;
     float springStiffness;
     float springLength;
+    float anchorStiffness;
 } propertiesBuffer;
 
 layout(set = 0, binding = 6, std140) uniform DeltaTimeBuffer {
@@ -60,6 +61,10 @@ layout(set = 0, binding = 6, std140) uniform DeltaTimeBuffer {
 } deltaTimeBuffer;
 
 layout(set = 0, binding = 7, rgba32f) uniform image2D positionsImage;
+
+layout(set = 0, binding = 8, std430) restrict readonly buffer AnchorBuffer {
+    Position data[];
+} anchorBuffer;
 
 const int gX = 15;
 const int gY = 7;
@@ -150,8 +155,10 @@ void main() {
         northBendForce + eastBendForce + westBendForce + southBendForce
     );
 
+    vec2 anchorDir = anchorBuffer.data[idx].pos - posBuffer.data[idx].pos;
+    vec2 anchorForce = anchorDir * propertiesBuffer.anchorStiffness;
     vec2 mouseForce = getMouseForce(idx);
-    vec2 force = internalForce + externalForcesBuffer.data[idx].force + mouseForce;
+    vec2 force = internalForce + anchorForce + externalForcesBuffer.data[idx].force + mouseForce;
     vec2 acceleration = force / (mass == 0.0 ? 1.0 : mass);
     float delta = deltaTimeBuffer.deltaTime;
     vec2 vDelta = notEdge * acceleration * delta;
