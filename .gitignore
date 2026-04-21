@@ -1,5 +1,0 @@
-# Godot 4+ specific ignores
-.godot/
-/android/
-.mcp.json
-.idea/
