@@ -999,7 +999,7 @@ public partial class WarpGridManager : Node2D
 
     static int ComputeBatchSize(int pointCount)
     {
-        int workerCount = Math.Max(Environment.ProcessorCount, 1);
+        int workerCount = Math.Max(System.Environment.ProcessorCount, 1);
         int targetChunks = workerCount * 2;
         int chunkSize = Math.Max(pointCount / Math.Max(targetChunks, 1), 1024);
         return Math.Min(pointCount, chunkSize);
