@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Godot WarpGrid Test"
 run/main_scene="uid://djb16kdnyk0cc"
-config/features=PackedStringArray("4.6", "Mobile")
+config/features=PackedStringArray("4.6", "C#", "Mobile")
 config/icon="res://icon.svg"
 
 [dotnet]

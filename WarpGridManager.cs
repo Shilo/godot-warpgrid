@@ -41,10 +41,28 @@ public partial class WarpGridManager : Node2D
 
     [ExportGroup("Mouse Force")]
     [Export]
-    public float MouseExplosiveForce { get; set; } = 500.0f;
+    public float HoldDirectedForce { get; set; } = 60.0f;
 
     [Export]
-    public float MouseExplosiveRadius { get; set; } = 120.0f;
+    public float HoldDirectedRadius { get; set; } = 65.0f;
+
+    [Export]
+    public float HoldImpulseForce { get; set; } = 24.0f;
+
+    [Export]
+    public float HoldImpulseRadius { get; set; } = 90.0f;
+
+    [Export]
+    public float ClickExplosiveForce { get; set; } = 90.0f;
+
+    [Export]
+    public float ClickExplosiveRadius { get; set; } = 80.0f;
+
+    [Export]
+    public float ClickImplosiveForce { get; set; } = 20.0f;
+
+    [Export]
+    public float ClickImplosiveRadius { get; set; } = 140.0f;
 
     private readonly ArrayMesh _arrayMesh = new();
     private MeshInstance2D _meshInstance = null!;
@@ -53,6 +71,8 @@ public partial class WarpGridManager : Node2D
     private Point[,] _points = new Point[0, 0];
     private Vector2 _screenSize = Vector2.Zero;
     private Vector2 _lastViewportSize = Vector2.Zero;
+    private bool _wasLeftMousePressed;
+    private bool _wasRightMousePressed;
 
     public override void _Ready()
     {
@@ -83,6 +103,8 @@ public partial class WarpGridManager : Node2D
             return;
         }
 
+        HandlePointerForces();
+
         foreach (Spring spring in _springs)
         {
             spring.Update();
@@ -104,17 +126,6 @@ public partial class WarpGridManager : Node2D
         }
 
         RebuildMesh();
-    }
-
-    public override void _UnhandledInput(InputEvent @event)
-    {
-        if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouseButton)
-        {
-            ApplyExplosiveForce(
-                MouseExplosiveForce,
-                new Vector3(mouseButton.Position.X, mouseButton.Position.Y, 0.0f),
-                MouseExplosiveRadius);
-        }
     }
 
     public void ResetGrid()
@@ -283,7 +294,23 @@ public partial class WarpGridManager : Node2D
                 {
                     up = ToVec2(_points[x, y - 1].Position);
                     float thickness = x % 3 == 1 ? 3.0f : 1.0f;
-                    AddLineQuad(up, point, thickness, GridColor, vertices, uvs, colors, indices);
+                    int clampedY = Mathf.Min(y + 1, height - 1);
+                    Vector2 mid = CatmullRom(
+                        ToVec2(_points[x, y - 2].Position),
+                        up,
+                        point,
+                        ToVec2(_points[x, clampedY].Position),
+                        0.5f);
+
+                    if (mid.DistanceSquaredTo((up + point) * 0.5f) > 1.0f)
+                    {
+                        AddLineQuad(up, mid, thickness, GridColor, vertices, uvs, colors, indices);
+                        AddLineQuad(mid, point, thickness, GridColor, vertices, uvs, colors, indices);
+                    }
+                    else
+                    {
+                        AddLineQuad(up, point, thickness, GridColor, vertices, uvs, colors, indices);
+                    }
                 }
 
                 if (x > 1 && y > 1)
@@ -309,6 +336,46 @@ public partial class WarpGridManager : Node2D
 
         _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         _arrayMesh.SurfaceSetMaterial(0, _lineMaterial);
+    }
+
+    private void HandlePointerForces()
+    {
+        bool leftPressed = Input.IsMouseButtonPressed(MouseButton.Left);
+        bool rightPressed = Input.IsMouseButtonPressed(MouseButton.Right);
+        bool ctrlPressed = Input.IsKeyPressed(Key.Ctrl);
+        Vector2 mousePosition2D = GetGlobalMousePosition();
+        Vector3 mousePosition = new(mousePosition2D.X, mousePosition2D.Y, 0.0f);
+
+        bool leftJustPressed = leftPressed && !_wasLeftMousePressed;
+        bool rightJustPressed = rightPressed && !_wasRightMousePressed;
+
+        if (ctrlPressed)
+        {
+            if (leftJustPressed)
+            {
+                ApplyExplosiveForce(ClickExplosiveForce, mousePosition, ClickExplosiveRadius);
+            }
+
+            if (rightJustPressed)
+            {
+                ApplyImplosiveForce(ClickImplosiveForce, mousePosition, ClickImplosiveRadius);
+            }
+        }
+        else
+        {
+            if (leftPressed)
+            {
+                ApplyDirectedForce(new Vector3(0.0f, 0.0f, HoldDirectedForce), mousePosition, HoldDirectedRadius);
+            }
+
+            if (rightPressed)
+            {
+                ApplyExplosiveForce(HoldImpulseForce, mousePosition, HoldImpulseRadius);
+            }
+        }
+
+        _wasLeftMousePressed = leftPressed;
+        _wasRightMousePressed = rightPressed;
     }
 
     private static void AddLineQuad(
