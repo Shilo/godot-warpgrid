@@ -6,8 +6,8 @@ namespace WarpGrid;
 [GlobalClass, Tool]
 public partial class WarpMouseController : Node2D
 {
-    [Export] public float ForceStrength   = 10.0f;  // Arcade-snappy brush: held input keeps feeding the CPU solver each tick.
-    [Export] public float ImpulseStrength = 50.0f;  // Middle-click punch for a single burst in the mass-spring grid.
+    [Export] public float ForceStrength   = 2500.0f;  // Arcade-snappy brush: held input keeps feeding the CPU solver each tick.
+    [Export] public float ImpulseStrength = 8000.0f;  // Middle-click punch for a single burst in the mass-spring grid.
     [Export] public float CursorRadius    = 50.0f; // Broad cursor brush so the deformation reads like a Geometry Wars wake.
     // Hover preview for the editor viewport: applies ForceStrength every tick at the cursor
     // so tuning tension and damping is possible without entering Play mode. Turn it off if

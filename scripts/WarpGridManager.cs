@@ -24,10 +24,10 @@ public partial class WarpGridManager : Node2D
     int _physicsGridH = 20;
     Vector2 _gridSizePixels = new(1152, 648);
 
-    float _springStiffness = 0.28f;
-    float _springDamping = 0.06f;
+    float _springStiffness = 40.0f;
+    float _springDamping = 15.0f;
     float _globalDamping = 0.98f;
-    float _anchorPull = 0.02f;
+    float _anchorPull = 12.0f;
     float _mass = 1.0f;
     bool _clampEdges = true;
     int _subSteps = 2;
@@ -284,10 +284,10 @@ public partial class WarpGridManager : Node2D
         switch (preset)
         {
             case VibePreset.GeometryWars:
-                _springStiffness = 0.28f;
-                _springDamping = 0.06f;
+                _springStiffness = 40.0f;
+                _springDamping = 15.0f;
                 _globalDamping = 0.98f;
-                _anchorPull = 0.02f;
+                _anchorPull = 12.0f;
                 _mass = 1.0f;
                 break;
             case VibePreset.ElasticSilk:
@@ -452,6 +452,7 @@ public partial class WarpGridManager : Node2D
         // The hot loops below walk the SoA buffers linearly so the CPU gets tight,
         // cache-friendly access patterns and the JIT has the best chance to elide
         // bounds checks and auto-vectorize the branch-light arithmetic.
+        float dt = FixedDt * stepScale;
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
         float damping = MathF.Pow(_globalDamping, stepScale);
@@ -505,13 +506,15 @@ public partial class WarpGridManager : Node2D
                     continue;
                 }
 
-                float velX = _velX[i] + (accX * invMass * stepScale);
-                float velY = _velY[i] + (accY * invMass * stepScale);
+                float velX = _velX[i] + (accX * invMass * dt);
+                float velY = _velY[i] + (accY * invMass * dt);
                 velX *= damping;
                 velY *= damping;
+                velX = Math.Clamp(velX, -2000.0f, 2000.0f);
+                velY = Math.Clamp(velY, -2000.0f, 2000.0f);
 
-                float posX = _posX[i] + (velX * stepScale);
-                float posY = _posY[i] + (velY * stepScale);
+                float posX = _posX[i] + (velX * dt);
+                float posY = _posY[i] + (velY * dt);
 
                 _velX[i] = velX;
                 _velY[i] = velY;
@@ -758,8 +761,8 @@ public partial class WarpGridManager : Node2D
         float velocityDiffX = _velX[neighborIndex] - _velX[pointIndex];
         float velocityDiffY = _velY[neighborIndex] - _velY[pointIndex];
 
-        totalX += (springOffsetX * _springStiffness) - (velocityDiffX * _springDamping);
-        totalY += (springOffsetY * _springStiffness) - (velocityDiffY * _springDamping);
+        totalX += (springOffsetX * _springStiffness) + (velocityDiffX * _springDamping);
+        totalY += (springOffsetY * _springStiffness) + (velocityDiffY * _springDamping);
     }
 
     void UploadPositionsTexture()
