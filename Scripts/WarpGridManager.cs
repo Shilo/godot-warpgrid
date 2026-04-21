@@ -6,7 +6,7 @@ using System.Collections.Generic;
 public partial class WarpGridManager : Node2D
 {
     [Export] public float Mass { get; set; } = 1.0f;
-    [Export] public float Damping { get; set; } = 0.98f;
+    [Export] public float Damping { get; set; } = 0.95f;
     [Export] public float Stiffness { get; set; } = 0.3f;
     [Export] public float RestLength { get; set; } = 1.0f;
     [Export] public float MouseStrength { get; set; } = 1500.0f;

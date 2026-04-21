@@ -1,8 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://djb16kdnyk0cc"]
+[gd_scene format=3 uid="uid://djb16kdnyk0cc"]
 
-[ext_resource type="Script" path="res://Scripts/WarpGridManager.cs" id="1_66v8u"]
+[ext_resource type="Script" uid="uid://dfmanbdn4mi62" path="res://Scripts/WarpGridManager.cs" id="1_66v8u"]
 
 [node name="Main" type="Node2D" unique_id=513570337]
 script = ExtResource("1_66v8u")
+MouseStrength = 150.0
+MouseRadius = 5.0
 
-[node name="WarpGridDisplay" type="MeshInstance2D" parent="."]
+[node name="WarpGridDisplay" type="MeshInstance2D" parent="." unique_id=1620346483]

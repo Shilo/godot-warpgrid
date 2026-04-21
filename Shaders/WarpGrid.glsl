@@ -106,7 +106,6 @@ void main() {
     }
 
     float mass = propertiesBuffer.mass;
-    float damping = propertiesBuffer.damping;
     float stiffness = propertiesBuffer.springStiffness;
     float springLength = propertiesBuffer.springLength;
 
@@ -131,19 +130,19 @@ void main() {
         southBendNeighbour.y != 0
     );
 
-    vec2 northForce = getForceForNeighbour(idx, northNeighbour, stiffness, springLength, damping);
-    vec2 northEastForce = getForceForNeighbour(idx, northEastNeighbour, stiffness, springLength, damping);
-    vec2 eastForce = getForceForNeighbour(idx, eastNeighbour, stiffness, springLength, damping);
-    vec2 southEastForce = getForceForNeighbour(idx, southEastNeighbour, stiffness, springLength, damping);
-    vec2 southForce = getForceForNeighbour(idx, southNeighbour, stiffness, springLength, damping);
-    vec2 southWestForce = getForceForNeighbour(idx, southWestNeighbour, stiffness, springLength, damping);
-    vec2 westForce = getForceForNeighbour(idx, westNeighbour, stiffness, springLength, damping);
-    vec2 northWestForce = getForceForNeighbour(idx, northWestNeighbour, stiffness, springLength, damping);
+    vec2 northForce = getForceForNeighbour(idx, northNeighbour, stiffness, springLength, 0.0);
+    vec2 northEastForce = getForceForNeighbour(idx, northEastNeighbour, stiffness, springLength, 0.0);
+    vec2 eastForce = getForceForNeighbour(idx, eastNeighbour, stiffness, springLength, 0.0);
+    vec2 southEastForce = getForceForNeighbour(idx, southEastNeighbour, stiffness, springLength, 0.0);
+    vec2 southForce = getForceForNeighbour(idx, southNeighbour, stiffness, springLength, 0.0);
+    vec2 southWestForce = getForceForNeighbour(idx, southWestNeighbour, stiffness, springLength, 0.0);
+    vec2 westForce = getForceForNeighbour(idx, westNeighbour, stiffness, springLength, 0.0);
+    vec2 northWestForce = getForceForNeighbour(idx, northWestNeighbour, stiffness, springLength, 0.0);
 
-    vec2 northBendForce = getForceForNeighbour(idx, northBendNeighbour, stiffness, springLength, damping);
-    vec2 eastBendForce = getForceForNeighbour(idx, eastBendNeighbour, stiffness, springLength, damping);
-    vec2 westBendForce = getForceForNeighbour(idx, southBendNeighbour, stiffness, springLength, damping);
-    vec2 southBendForce = getForceForNeighbour(idx, westBendNeighbour, stiffness, springLength, damping);
+    vec2 northBendForce = getForceForNeighbour(idx, northBendNeighbour, stiffness, springLength, 0.0);
+    vec2 eastBendForce = getForceForNeighbour(idx, eastBendNeighbour, stiffness, springLength, 0.0);
+    vec2 westBendForce = getForceForNeighbour(idx, southBendNeighbour, stiffness, springLength, 0.0);
+    vec2 southBendForce = getForceForNeighbour(idx, westBendNeighbour, stiffness, springLength, 0.0);
 
     vec2 internalForce = (
         northForce + eastForce + westForce + southForce +
