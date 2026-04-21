@@ -11,6 +11,7 @@ public partial class WarpGridManager : Node2D
     [Export] public float RestLength { get; set; } = 1.0f;
     [Export] public float MouseStrength { get; set; } = 100.0f;
     [Export] public float MouseRadius { get; set; } = 2.0f;
+    [Export(PropertyHint.Range, "0.1,1.0,0.01")] public float ViewportFill { get; set; } = 0.7f;
     [Export] public Color LineColor { get; set; } = new(0.14f, 0.81f, 0.96f, 1.0f);
 
     private const int ThreadGroupSizeX = 4;
@@ -49,6 +50,7 @@ public partial class WarpGridManager : Node2D
     private bool _pointerHeld;
     private bool _touchActive;
     private Vector2 _pointerGlobalPosition;
+    private Vector2 _lastViewportSize;
     private bool _resourcesReady;
 
     private int GridResX => GridUnitSideX * ThreadGroupSizeX;
@@ -57,7 +59,9 @@ public partial class WarpGridManager : Node2D
 
     public override void _Ready()
     {
-        Position = GetViewportRect().Size * 0.5f;
+        _lastViewportSize = GetViewportRect().Size;
+        Position = _lastViewportSize * 0.5f;
+        UpdateDisplayScale();
         _pointerGlobalPosition = GlobalPosition;
 
         _rd = RenderingServer.GetRenderingDevice();
@@ -78,6 +82,19 @@ public partial class WarpGridManager : Node2D
 
         CreateDisplayResources();
         _resourcesReady = true;
+    }
+
+    public override void _Process(double delta)
+    {
+        Vector2 viewportSize = GetViewportRect().Size;
+        if (viewportSize == _lastViewportSize)
+        {
+            return;
+        }
+
+        _lastViewportSize = viewportSize;
+        Position = viewportSize * 0.5f;
+        UpdateDisplayScale();
     }
 
     public override void _Input(InputEvent @event)
@@ -482,6 +499,23 @@ public partial class WarpGridManager : Node2D
     private float GetWorldGridSideLengthY()
     {
         return GridResY * RestLength;
+    }
+
+    private void UpdateDisplayScale()
+    {
+        Vector2 viewportSize = GetViewportRect().Size;
+        if (viewportSize.X <= 0.0f || viewportSize.Y <= 0.0f)
+        {
+            return;
+        }
+
+        float simWidth = Mathf.Max(GetWorldGridSideLengthX(), 1.0f);
+        float simHeight = Mathf.Max(GetWorldGridSideLengthY(), 1.0f);
+        float scaleX = (viewportSize.X * ViewportFill) / simWidth;
+        float scaleY = (viewportSize.Y * ViewportFill) / simHeight;
+        float uniformScale = Mathf.Max(1.0f, Mathf.Min(scaleX, scaleY));
+
+        Scale = Vector2.One * uniformScale;
     }
 
     private static RDUniform CreateUniform(int binding, RenderingDevice.UniformType type, Rid rid)
