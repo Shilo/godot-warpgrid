@@ -29,7 +29,9 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 ## Main tuning knobs
 
 - `Preset`
-  Applies the Geometry Wars-style defaults.
+  Applies `GeometryWars`, `ElasticSilk`, or `ArcadeRigid` defaults.
+- `SubSteps`
+  Splits each 120 Hz physics tick into smaller mini-steps under heavier load for extra spring stability.
 - `SpringStiffness`
   Neighbor spring pull. Higher values make the sheet feel tighter and more immediate.
 - `SpringDamping`
@@ -58,5 +60,6 @@ The visual target is the taut elastic skin from *Geometry Wars: Retro Evolved*: 
 
 - The solver is intentionally CPU-side now; there is no compute-shader physics dispatch loop.
 - The shader expects the positions texture contract described in `WarpGridGpuManifest.cs`.
+- The display bridge now uploads both position and velocity textures so the shader can add phosphor persistence and hot-wire tinting without moving physics back to the GPU.
 - Grid-mode line density follows the display mesh, while warp deformation still comes from the lower-resolution physics texture.
 - No automated tests are included for this refactor by design.

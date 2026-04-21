@@ -7,6 +7,7 @@ render_mode unshaded;
 // The sampler stays filter_linear so the display mesh bilinear-samples the low-res
 // physics texture instead of exposing the raw texel grid.
 uniform sampler2D positions_tex : filter_linear;
+uniform sampler2D velocity_tex : filter_linear;
 uniform sampler2D main_tex : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid_size_pixels;
 uniform ivec2 display_grid_dims;
@@ -16,6 +17,8 @@ uniform vec2 phys_tex_size = vec2(37.0, 21.0);
 uniform float physics_min_spacing = 32.0;
 uniform vec4 line_color : source_color = vec4(0.1, 1.0, 1.0, 1.0);
 uniform float glow_gain : hint_range(0.0, 5.0) = 1.0;
+uniform float phosphor_persistence : hint_range(0.0, 2.0) = 0.7;
+uniform float hot_shift_strength : hint_range(0.0, 1.0) = 0.45;
 
 // 0 = Grid (procedural UV lines); 1 = Texture (sample main_tex).
 uniform int display_mode = 0;
@@ -28,8 +31,19 @@ vec4 sample_positions(vec2 uv) {
 	return texture(positions_tex, sample_uv);
 }
 
+float sample_velocity_energy(vec2 uv) {
+	vec2 sample_uv = (uv * (phys_tex_size - vec2(1.0)) + vec2(0.5)) / phys_tex_size;
+	return texture(velocity_tex, sample_uv).r / max(physics_min_spacing, 1.0);
+}
+
 float normalized_energy(vec2 warp) {
 	return length(warp) / max(physics_min_spacing, 1.0);
+}
+
+vec3 hot_wire_tint(vec3 base, float velocity_energy) {
+	float hot = smoothstep(0.45, 1.25, velocity_energy) * hot_shift_strength;
+	vec3 hot_color = mix(vec3(1.0, 0.82, 0.55), vec3(1.0), hot * 0.7);
+	return mix(base, hot_color, hot);
 }
 
 void vertex() {
@@ -71,30 +85,38 @@ void fragment() {
 	vec4 packed = sample_positions(UV);
 	vec2 frag_warp = packed.xy - packed.zw;
 	float energy = max(v_energy, normalized_energy(frag_warp));
+	float velocity_energy = sample_velocity_energy(UV);
 	float glow = smoothstep(0.0, 1.0, energy * glow_gain);
+	float persistence = smoothstep(0.12, 1.15, energy) * phosphor_persistence;
 	vec2 aberr_dir = (length(frag_warp) > 1e-5) ? normalize(frag_warp) : vec2(1.0, 0.0);
 	float aberr = clamp(energy * 0.08, 0.0, 1.0);
+	vec3 hot_rgb = hot_wire_tint(line_color.rgb, max(velocity_energy, energy * 0.7));
 
 	if (display_mode == 1) {
 		// Texture mode — sample the sprite, tint it lightly, and add subtle energy glow.
 		vec4 tex_col = apply_chromatic_aberration(main_tex, UV, aberr_dir, energy, 1.0);
-		vec4 base = tex_col * line_color;
-		vec4 bright = base * 1.55;
+		vec4 base = tex_col * vec4(hot_rgb, line_color.a);
+		vec4 bright = base * (1.45 + (0.35 * persistence));
 		bright.a = base.a;
 		COLOR = mix(base, bright, glow);
+		COLOR.rgb += hot_rgb * persistence * 0.18;
 	} else {
 		vec2 cells = vec2(display_grid_dims);
-		float taper = mix(1.0, 0.55, smoothstep(0.0, 0.75, energy));
+		float taper = mix(0.92, 0.34, smoothstep(0.0, 0.95, energy));
 		float line_mask_r = grid_line_mask(UV + aberr_dir * aberr * 0.6, cells, taper);
 		float line_mask_g = grid_line_mask(UV, cells, taper);
 		float line_mask_b = grid_line_mask(UV - aberr_dir * aberr * 0.6, cells, taper);
-		vec3 lit_rgb = line_color.rgb * vec3(line_mask_r, line_mask_g, line_mask_b);
+		float persistence_mask = grid_line_mask(UV, cells, taper * 2.1);
+		vec3 lit_rgb = hot_rgb * vec3(line_mask_r, line_mask_g, line_mask_b);
 		float line_mask = max(max(line_mask_r, line_mask_g), line_mask_b);
+		line_mask = max(line_mask, persistence_mask * 0.24 * persistence);
 
 		vec4 bg = vec4(line_color.rgb * 0.08, 0.85);
-		vec4 bright = vec4(lit_rgb * 1.55, line_color.a);
+		vec3 persistence_rgb = hot_rgb * persistence * persistence_mask * 0.42;
+		vec4 bright = vec4((lit_rgb * (1.45 + (0.5 * persistence))) + persistence_rgb, line_color.a);
 		vec4 lit = mix(vec4(lit_rgb, line_color.a), bright, glow);
 		COLOR = mix(bg, lit, line_mask);
+		COLOR.rgb += persistence_rgb * 0.6;
 	}
 	COLOR.rgb = min(COLOR.rgb, vec3(1.0));
 }

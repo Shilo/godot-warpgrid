@@ -6,13 +6,15 @@ using Godot;
 namespace WarpGrid;
 
 public enum WarpRenderMode { Grid = 0, Texture = 1 }
-public enum VibePreset { Custom = 0, GeometryWars = 1 }
+public enum VibePreset { Custom = 0, GeometryWars = 1, ElasticSilk = 2, ArcadeRigid = 3 }
 
 [GlobalClass, Tool]
 public partial class WarpGridManager : Node2D
 {
     const float FixedDt = 1.0f / 120.0f;
     const int MaxPhysicsStepsPerFrame = 8;
+    const int MaxSupportedSubSteps = 8;
+    const int EffectorPartitionThreshold = 32;
     const float SleepThreshold = 1e-4f;
     const float SpringEpsilon = 1e-6f;
 
@@ -28,12 +30,14 @@ public partial class WarpGridManager : Node2D
     float _anchorPull = 0.02f;
     float _mass = 1.0f;
     bool _clampEdges = true;
+    int _subSteps = 2;
 
     float _accumulator;
     float _physicsSpacingX;
     float _physicsSpacingY;
     int _parallelBatchSize;
     bool _positionsDirty = true;
+    float _lastLoadMetric;
 
     WarpRenderMode _renderMode = WarpRenderMode.Grid;
     VibePreset _vibePreset = VibePreset.GeometryWars;
@@ -157,6 +161,12 @@ public partial class WarpGridManager : Node2D
         set => _clampEdges = value;
     }
 
+    [Export] public int SubSteps
+    {
+        get => _subSteps;
+        set => _subSteps = Math.Clamp(value, 1, MaxSupportedSubSteps);
+    }
+
     [Export] public bool ForceRebuild
     {
         get => false;
@@ -178,6 +188,8 @@ public partial class WarpGridManager : Node2D
     ShaderMaterial _material;
     Image _positionsImage;
     ImageTexture _positionsTexture;
+    Image _velocityImage;
+    ImageTexture _velocityTexture;
 
     float[] _posX = Array.Empty<float>();
     float[] _posY = Array.Empty<float>();
@@ -190,8 +202,15 @@ public partial class WarpGridManager : Node2D
     bool[] _edgeMask = Array.Empty<bool>();
     bool[] _sleeping = Array.Empty<bool>();
     byte[] _positionsScratch = Array.Empty<byte>();
+    byte[] _velocityScratch = Array.Empty<byte>();
     EffectorRuntime[] _effectorScratch = Array.Empty<EffectorRuntime>();
     OrderablePartitioner<Tuple<int, int>> _pointRanges;
+    int[] _effectorStripStarts = Array.Empty<int>();
+    int[] _effectorStripCursor = Array.Empty<int>();
+    int[] _effectorStripItems = Array.Empty<int>();
+    int _effectorStripCount;
+    float _effectorStripWidth;
+    bool _useEffectorPartition;
 
     readonly struct EffectorRuntime
     {
@@ -254,14 +273,30 @@ public partial class WarpGridManager : Node2D
 
     void ApplyPreset(VibePreset preset)
     {
-        if (preset != VibePreset.GeometryWars)
-            return;
-
-        _springStiffness = 0.28f;
-        _springDamping = 0.06f;
-        _globalDamping = 0.98f;
-        _anchorPull = 0.02f;
-        _mass = 1.0f;
+        switch (preset)
+        {
+            case VibePreset.GeometryWars:
+                _springStiffness = 0.28f;
+                _springDamping = 0.06f;
+                _globalDamping = 0.98f;
+                _anchorPull = 0.02f;
+                _mass = 1.0f;
+                break;
+            case VibePreset.ElasticSilk:
+                _springStiffness = 0.12f;
+                _springDamping = 0.10f;
+                _globalDamping = 0.992f;
+                _anchorPull = 0.008f;
+                _mass = 1.15f;
+                break;
+            case VibePreset.ArcadeRigid:
+                _springStiffness = 0.56f;
+                _springDamping = 0.11f;
+                _globalDamping = 0.93f;
+                _anchorPull = 0.075f;
+                _mass = 0.9f;
+                break;
+        }
     }
 
     public void Rebuild()
@@ -312,6 +347,7 @@ public partial class WarpGridManager : Node2D
         _edgeMask = new bool[pointCount];
         _sleeping = new bool[pointCount];
         _positionsScratch = new byte[pointCount * WarpGridGpuManifest.PositionTexelStride];
+        _velocityScratch = new byte[pointCount * WarpGridGpuManifest.VelocityTexelStride];
         _parallelBatchSize = ComputeBatchSize(pointCount);
         _pointRanges = Partitioner.Create(0, pointCount, _parallelBatchSize);
 
@@ -347,8 +383,15 @@ public partial class WarpGridManager : Node2D
             false,
             WarpGridGpuManifest.PositionImageFormat);
         _positionsTexture = ImageTexture.CreateFromImage(_positionsImage);
+        _velocityImage = Image.CreateEmpty(
+            PhysNodesX,
+            PhysNodesY,
+            false,
+            WarpGridGpuManifest.VelocityImageFormat);
+        _velocityTexture = ImageTexture.CreateFromImage(_velocityImage);
 
         _material.SetShaderParameter("positions_tex", _positionsTexture);
+        _material.SetShaderParameter("velocity_tex", _velocityTexture);
         _material.SetShaderParameter("grid_size_pixels", GridSizePixels);
         _material.SetShaderParameter("display_grid_dims", new Vector2I(_gridW, _gridH));
         _material.SetShaderParameter("phys_tex_size", new Vector2(PhysNodesX, PhysNodesY));
@@ -372,7 +415,15 @@ public partial class WarpGridManager : Node2D
         int steps = 0;
         while (_accumulator >= FixedDt && steps < MaxPhysicsStepsPerFrame)
         {
-            SimulatePhysics();
+            int effectorCount = GatherActiveEffectors();
+            BuildEffectorPartition(effectorCount);
+            _lastLoadMetric = EstimateLoadMetric();
+            int subStepCount = DetermineSubStepCount(effectorCount, _lastLoadMetric);
+            float stepScale = 1.0f / subStepCount;
+
+            for (int subStep = 0; subStep < subStepCount; subStep++)
+                SimulatePhysics(stepScale, effectorCount);
+
             _accumulator -= FixedDt;
             stepped = true;
             steps++;
@@ -385,10 +436,11 @@ public partial class WarpGridManager : Node2D
             UploadPositionsTexture();
     }
 
-    void SimulatePhysics()
+    void SimulatePhysics(float stepScale, int effectorCount)
     {
         float invMass = 1.0f / _mass;
         float sleepSq = SleepThreshold * SleepThreshold;
+        float damping = MathF.Pow(_globalDamping, stepScale);
 
         ForEachPointRange((start, end) =>
         {
@@ -407,7 +459,6 @@ public partial class WarpGridManager : Node2D
             }
         });
 
-        int effectorCount = GatherActiveEffectors();
         ApplyEffectors(effectorCount);
         ApplySpringForces();
 
@@ -440,13 +491,13 @@ public partial class WarpGridManager : Node2D
                     continue;
                 }
 
-                float velX = _velX[i] + (accX * invMass);
-                float velY = _velY[i] + (accY * invMass);
-                velX *= _globalDamping;
-                velY *= _globalDamping;
+                float velX = _velX[i] + (accX * invMass * stepScale);
+                float velY = _velY[i] + (accY * invMass * stepScale);
+                velX *= damping;
+                velY *= damping;
 
-                float posX = _posX[i] + velX;
-                float posY = _posY[i] + velY;
+                float posX = _posX[i] + (velX * stepScale);
+                float posY = _posY[i] + (velY * stepScale);
 
                 _velX[i] = velX;
                 _velY[i] = velY;
@@ -513,9 +564,18 @@ public partial class WarpGridManager : Node2D
                 float py = _posY[i];
                 float totalX = 0.0f;
                 float totalY = 0.0f;
-
-                for (int effectorIndex = 0; effectorIndex < effectorCount; effectorIndex++)
+                int effectorStart = 0;
+                int effectorEnd = effectorCount;
+                if (_useEffectorPartition)
                 {
+                    int stripIndex = GetEffectorStripIndex(px);
+                    effectorStart = _effectorStripStarts[stripIndex];
+                    effectorEnd = _effectorStripStarts[stripIndex + 1];
+                }
+
+                for (int effectorRefIndex = effectorStart; effectorRefIndex < effectorEnd; effectorRefIndex++)
+                {
+                    int effectorIndex = _useEffectorPartition ? _effectorStripItems[effectorRefIndex] : effectorRefIndex;
                     ref readonly EffectorRuntime effector = ref _effectorScratch[effectorIndex];
 
                     float centerX = effector.StartX;
@@ -672,7 +732,7 @@ public partial class WarpGridManager : Node2D
 
     void UploadPositionsTexture()
     {
-        if (_positionsImage == null || _positionsTexture == null)
+        if (_positionsImage == null || _positionsTexture == null || _velocityImage == null || _velocityTexture == null)
             return;
 
         for (int i = 0; i < PointCount; i++)
@@ -685,6 +745,12 @@ public partial class WarpGridManager : Node2D
                     _posY[i],
                     _anchorX[i],
                     _anchorY[i]));
+
+            int velocityByteOffset = i * WarpGridGpuManifest.VelocityTexelStride;
+            float velocityMagnitude = MathF.Sqrt((_velX[i] * _velX[i]) + (_velY[i] * _velY[i]));
+            WarpGridGpuManifest.WriteVelocityTexel(
+                _velocityScratch.AsSpan(velocityByteOffset, WarpGridGpuManifest.VelocityTexelStride),
+                velocityMagnitude);
         }
 
         _positionsImage.SetData(
@@ -694,6 +760,13 @@ public partial class WarpGridManager : Node2D
             WarpGridGpuManifest.PositionImageFormat,
             _positionsScratch);
         _positionsTexture.Update(_positionsImage);
+        _velocityImage.SetData(
+            PhysNodesX,
+            PhysNodesY,
+            false,
+            WarpGridGpuManifest.VelocityImageFormat,
+            _velocityScratch);
+        _velocityTexture.Update(_velocityImage);
         _positionsDirty = false;
     }
 
@@ -759,6 +832,124 @@ public partial class WarpGridManager : Node2D
             return;
 
         _effectorScratch = new EffectorRuntime[Math.Max(requiredCapacity, 4)];
+    }
+
+    void BuildEffectorPartition(int effectorCount)
+    {
+        _useEffectorPartition = effectorCount > EffectorPartitionThreshold;
+        if (!_useEffectorPartition)
+            return;
+
+        _effectorStripCount = Math.Clamp(PhysNodesX, 8, 64);
+        _effectorStripWidth = MathF.Max(GridSizePixels.X / _effectorStripCount, 1.0f);
+        EnsureEffectorStripCapacity(_effectorStripCount);
+
+        Array.Clear(_effectorStripStarts, 0, _effectorStripCount + 1);
+
+        for (int effectorIndex = 0; effectorIndex < effectorCount; effectorIndex++)
+        {
+            GetEffectorStripRange(in _effectorScratch[effectorIndex], out int startStrip, out int endStrip);
+            for (int strip = startStrip; strip <= endStrip; strip++)
+                _effectorStripStarts[strip + 1]++;
+        }
+
+        for (int strip = 1; strip <= _effectorStripCount; strip++)
+            _effectorStripStarts[strip] += _effectorStripStarts[strip - 1];
+
+        int totalAssignments = _effectorStripStarts[_effectorStripCount];
+        if (totalAssignments <= 0)
+        {
+            _useEffectorPartition = false;
+            return;
+        }
+
+        EnsureEffectorStripItemCapacity(totalAssignments);
+        Array.Copy(_effectorStripStarts, _effectorStripCursor, _effectorStripCount);
+
+        for (int effectorIndex = 0; effectorIndex < effectorCount; effectorIndex++)
+        {
+            GetEffectorStripRange(in _effectorScratch[effectorIndex], out int startStrip, out int endStrip);
+            for (int strip = startStrip; strip <= endStrip; strip++)
+            {
+                int writeIndex = _effectorStripCursor[strip]++;
+                _effectorStripItems[writeIndex] = effectorIndex;
+            }
+        }
+    }
+
+    void EnsureEffectorStripCapacity(int stripCount)
+    {
+        if (_effectorStripStarts.Length < stripCount + 1)
+            _effectorStripStarts = new int[stripCount + 1];
+        if (_effectorStripCursor.Length < stripCount)
+            _effectorStripCursor = new int[stripCount];
+    }
+
+    void EnsureEffectorStripItemCapacity(int itemCount)
+    {
+        if (_effectorStripItems.Length >= itemCount)
+            return;
+
+        _effectorStripItems = new int[itemCount];
+    }
+
+    int GetEffectorStripIndex(float positionX)
+    {
+        int strip = (int)(positionX / _effectorStripWidth);
+        return Math.Clamp(strip, 0, _effectorStripCount - 1);
+    }
+
+    void GetEffectorStripRange(in EffectorRuntime effector, out int startStrip, out int endStrip)
+    {
+        float minX = MathF.Min(effector.StartX, effector.EndX) - effector.EffectiveRadius;
+        float maxX = MathF.Max(effector.StartX, effector.EndX) + effector.EffectiveRadius;
+        startStrip = GetEffectorStripIndex(minX);
+        endStrip = GetEffectorStripIndex(maxX);
+    }
+
+    float EstimateLoadMetric()
+    {
+        float minSpacing = MathF.Max(MathF.Min(_physicsSpacingX, _physicsSpacingY), 1.0f);
+        float invSpacingSq = 1.0f / (minSpacing * minSpacing);
+        float maxMetricSq = 0.0f;
+        object sync = new();
+
+        ForEachPointRange((start, end) =>
+        {
+            float localMaxSq = 0.0f;
+            for (int i = start; i < end; i++)
+            {
+                float displacementX = _posX[i] - _anchorX[i];
+                float displacementY = _posY[i] - _anchorY[i];
+                float displacementSq = (displacementX * displacementX) + (displacementY * displacementY);
+                float velocitySq = (_velX[i] * _velX[i]) + (_velY[i] * _velY[i]);
+                float metricSq = MathF.Max(displacementSq, velocitySq) * invSpacingSq;
+                if (metricSq > localMaxSq)
+                    localMaxSq = metricSq;
+            }
+
+            if (localMaxSq <= maxMetricSq)
+                return;
+
+            lock (sync)
+            {
+                if (localMaxSq > maxMetricSq)
+                    maxMetricSq = localMaxSq;
+            }
+        });
+
+        return MathF.Sqrt(maxMetricSq);
+    }
+
+    int DetermineSubStepCount(int effectorCount, float loadMetric)
+    {
+        if (_subSteps <= 1)
+            return 1;
+        if (loadMetric > 0.85f || effectorCount > 6)
+            return _subSteps;
+        if (loadMetric > 0.45f || effectorCount > 0)
+            return Math.Min(_subSteps, 2);
+        return 1;
     }
 
     bool AreNeighboringNodesSleeping(int index, int x)
