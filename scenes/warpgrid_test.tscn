@@ -7,6 +7,9 @@
 
 [node name="WarpGridManager" type="Node2D" parent="." unique_id=110895201]
 script = ExtResource("1_mgr")
+GridW = 36
+GridH = 20
 
 [node name="WarpMouseController" type="Node2D" parent="." unique_id=-1984508179]
 script = ExtResource("3_mouse")
+EditorPreview = false

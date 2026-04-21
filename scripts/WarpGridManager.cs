@@ -414,7 +414,7 @@ public partial class WarpGridManager : Node2D
 
     public override void _PhysicsProcess(double delta)
     {
-        if (_posX.Length == 0 || _positionsTexture == null)
+        if (_posX.Length == 0 || _positionsTexture == null || _pointRanges == null)
             return;
 
         _accumulator = MathF.Min(_accumulator + (float)delta, FixedDt * MaxPhysicsStepsPerFrame);
@@ -858,6 +858,7 @@ public partial class WarpGridManager : Node2D
 
     void ForEachPointRange(Action<int, int> action)
     {
+        if (_pointRanges == null) return;
         Parallel.ForEach(_pointRanges, range => action(range.Item1, range.Item2));
     }
 
